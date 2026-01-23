@@ -299,7 +299,7 @@ def close_room_view(request, room_id):
 def staff_dashboard_view(request):
     """
     Staff dashboard view.
-    Returns general stats.
+    Returns general stats for the current support queue.
     """
     user = request.user
     
@@ -309,23 +309,40 @@ def staff_dashboard_view(request):
             status=status.HTTP_403_FORBIDDEN
         )
     
-    # Global stats for this staff member or all?
-    # Let's show stats for rooms they are assigned to, or just general stats
+    # Determine scope based on available support room
+    # If staff is in 'Player Support', show all player rooms
+    try:
+        active_support_room = user.active_support_room
+        room_type = active_support_room.room_type
+    except SupportRoom.DoesNotExist:
+        room_type = None
+
+    base_query = Room.objects.filter(is_active=True)
     
-    assigned_rooms = Room.objects.filter(staff_assigned=user, is_active=True)
+    if room_type:
+        if room_type == 'player':
+            base_query = base_query.filter(client__user_type='player')
+        elif room_type == 'agent':
+            base_query = base_query.filter(client__user_type='agent')
+        # 'all' implies no filter on client type
+    else:
+        # Fallback: only show rooms explicitly assigned if not in a support station
+        base_query = base_query.filter(staff_assigned=user)
     
-    total_participants = RoomParticipant.objects.filter(room__in=assigned_rooms, is_active=True).count()
-    total_messages = Message.objects.filter(room__in=assigned_rooms).count()
+    relevant_rooms = base_query
     
-    # Recent messages from across all assigned rooms
-    recent_messages = Message.objects.filter(room__in=assigned_rooms).order_by('-timestamp')[:10]
+    total_participants = RoomParticipant.objects.filter(room__in=relevant_rooms, is_active=True).count()
+    total_messages = Message.objects.filter(room__in=relevant_rooms).count()
+    
+    # Recent messages from across all relevant rooms
+    recent_messages = Message.objects.filter(room__in=relevant_rooms).order_by('-timestamp')[:10]
     
     return Response({
-        'room': None, # No single room concept anymore, maybe list?
+        'room': None, 
         'statistics': {
             'total_participants': total_participants,
             'total_messages': total_messages,
-            'assigned_rooms_count': assigned_rooms.count()
+            'assigned_rooms_count': relevant_rooms.count()
         },
         'recent_messages': MessageSerializer(recent_messages, many=True, context={'request': request}).data
     }, status=status.HTTP_200_OK)
