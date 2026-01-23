@@ -7,7 +7,13 @@ class SupportRoom(models.Model):
     A workstation/queue for staff.
     Staff members enter this room to start their shift and receive chats.
     """
+    ROOM_TYPES = (
+        ('player', 'Player Support'),
+        ('agent', 'Agent Support'),
+        ('all', 'General Support'),
+    )
     name = models.CharField(max_length=100)
+    room_type = models.CharField(max_length=10, choices=ROOM_TYPES, default='all')
     staff = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -28,10 +34,10 @@ class Room(models.Model):
     Chat room model. Each room is assigned to one staff member.
     """
     name = models.CharField(max_length=100, blank=True)
-    client = models.ForeignKey(
+    client = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name='support_rooms',
+        related_name='support_room',
         limit_choices_to={'user_type__in': ['player', 'agent']},
         null=True,
         blank=True
@@ -75,6 +81,7 @@ class Message(models.Model):
         related_name='sent_messages'
     )
     content = models.TextField()
+    attachment = models.FileField(upload_to='chat_attachments/', null=True, blank=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
     

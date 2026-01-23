@@ -15,8 +15,12 @@ print("Cleaning database...")
 superusers = User.objects.filter(is_superuser=True)
 print(f"Found {superusers.count()} superusers to preserve.")
 
+# Keep default users
+default_users = User.objects.filter(username__in=['staff', 'player', 'agent'])
+print(f"Found {default_users.count()} default users to preserve.")
+
 # Delete non-superusers
-deleted_users = User.objects.filter(is_superuser=False).delete()
+deleted_users = User.objects.filter(is_superuser=False).exclude(username__in=['staff', 'player', 'agent']).delete()
 print(f"Deleted non-superusers: {deleted_users}")
 
 # Delete all rooms, messages, support rooms (cascading might have done this, but to be sure)
@@ -26,3 +30,4 @@ RoomParticipant.objects.all().delete()
 SupportRoom.objects.all().delete()
 
 print("Database cleaned.")
+

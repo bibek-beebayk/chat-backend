@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Q
+from django.db.models import Q, Count
 from .models import Room, Message, RoomParticipant, SupportRoom
 from .serializers import (
     RoomSerializer,
@@ -72,7 +72,30 @@ def room_list_view(request):
     if user.user_type == 'staff':
         # Staff sees all rooms (active for assigned, inactive for unassigned/pending)
         # Ordered by status (active first) then creation date
-        rooms = Room.objects.all().order_by('-is_active', '-created_at')
+        # Get staff's active support room to filter chats
+        try:
+            active_support_room = user.active_support_room
+            room_type = active_support_room.room_type
+        except SupportRoom.DoesNotExist:
+            room_type = 'all'
+
+        # Filter logic
+        # If General Support ('all') or no room, show everything
+        # If Player Support, show only player chats
+        # If Agent Support, show only agent chats
+        
+        base_query = Room.objects.all()
+        if room_type == 'player':
+            base_query = base_query.filter(client__user_type='player')
+        elif room_type == 'agent':
+            base_query = base_query.filter(client__user_type='agent')
+            
+        rooms = base_query.annotate(
+            unread_count=Count(
+                'messages',
+                filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
+            )
+        ).order_by('-is_active', '-unread_count', '-created_at')
     else:
         # Players and Agents get their single unique room
         # Get or create logic
@@ -86,7 +109,6 @@ def room_list_view(request):
             # Find active support room with least load
             # We look for staff in active SupportRooms
             # Then we count how many active Rooms (chats) they are already assigned to
-            from django.db.models import Count, Q
             
             # Get staff active in support rooms
             # Annotate with the count of their CURRENTLY ACTIVE assigned chat rooms
@@ -108,6 +130,8 @@ def room_list_view(request):
             room.is_active = True
             room.save()
             
+        # Manually annotate unread count for serializer compatibility
+        room.unread_count = room.messages.filter(is_read=False).exclude(sender=user).count()
         rooms = [room]
     
     serializer = RoomSerializer(rooms, many=True)
@@ -126,7 +150,7 @@ def room_detail_view(request, room_id):
     if request.user.user_type != 'staff' and room.client != request.user:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
-    serializer = RoomDetailSerializer(room)
+    serializer = RoomDetailSerializer(room, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -138,14 +162,76 @@ def room_messages_view(request, room_id):
     """
     room = get_object_or_404(Room, id=room_id)
     
-     # Permission check
+    # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
+    # Mark unread messages as read
+    Message.objects.filter(room=room, is_read=False).exclude(sender=request.user).update(is_read=True)
+
     messages = Message.objects.filter(room=room).order_by('-timestamp')[:100]
     messages = list(reversed(messages))  # Reverse to show oldest first
-    serializer = MessageSerializer(messages, many=True)
+    serializer = MessageSerializer(messages, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def upload_attachment_view(request, room_id):
+    """
+    Upload a file attachment to a chat room.
+    """
+    room = get_object_or_404(Room, id=room_id)
+    user = request.user
+    
+    # Permission check
+    if user.user_type != 'staff' and room.client != user:
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    file_obj = request.FILES.get('file')
+    if not file_obj:
+        return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Create Message with attachment
+    # Note: Content is optional if we have an attachment, but good to have a fallback text
+    content = request.data.get('content', '')
+    if not content:
+        content = f"Sent a file: {file_obj.name}"
+
+    message = Message.objects.create(
+        room=room,
+        sender=user,
+        content=content,
+        attachment=file_obj
+    )
+
+    # Broadcast via WebSocket
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    
+    channel_layer = get_channel_layer()
+    room_group_name = f'chat_{room_id}'
+    
+    # Construct attachment URL manually if needed, or rely on serializer
+    # Serializer 'attachment' field will provide the full URL if context is passed, 
+    # but here we are in a view, so we can use the serializer.
+    
+    msg_data = MessageSerializer(message, context={'request': request}).data
+    
+    async_to_sync(channel_layer.group_send)(
+        room_group_name,
+        {
+            'type': 'chat_message',
+            'message': message.content,
+            'username': user.username,
+            'user_id': user.id,
+            'message_id': message.id,
+            'timestamp': message.timestamp.isoformat(),
+            'attachment': msg_data['attachment'] 
+        }
+    )
+
+    return Response(msg_data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -241,5 +327,5 @@ def staff_dashboard_view(request):
             'total_messages': total_messages,
             'assigned_rooms_count': assigned_rooms.count()
         },
-        'recent_messages': MessageSerializer(recent_messages, many=True).data
+        'recent_messages': MessageSerializer(recent_messages, many=True, context={'request': request}).data
     }, status=status.HTTP_200_OK)

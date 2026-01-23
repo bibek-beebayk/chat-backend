@@ -21,7 +21,7 @@ class MessageSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Message
-        fields = ['id', 'room', 'sender', 'content', 'timestamp', 'is_read']
+        fields = ['id', 'room', 'sender', 'content', 'attachment', 'timestamp', 'is_read']
         read_only_fields = ['id', 'timestamp']
 
 
@@ -41,9 +41,11 @@ class RoomSerializer(serializers.ModelSerializer):
     client = UserSerializer(read_only=True)
     participant_count = serializers.SerializerMethodField()
     
+    unread_count = serializers.IntegerField(read_only=True)
+    
     class Meta:
         model = Room
-        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participant_count']
+        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participant_count', 'unread_count']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
@@ -64,4 +66,4 @@ class RoomDetailSerializer(serializers.ModelSerializer):
     
     def get_recent_messages(self, obj):
         messages = obj.messages.all()[:50]
-        return MessageSerializer(messages, many=True).data
+        return MessageSerializer(messages, many=True, context=self.context).data

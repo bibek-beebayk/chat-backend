@@ -117,6 +117,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'user_id': event['user_id'],
             'message_id': event['message_id'],
             'timestamp': event['timestamp'],
+            'attachment': event.get('attachment'),
         }))
     
     async def user_join(self, event):

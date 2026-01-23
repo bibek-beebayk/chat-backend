@@ -12,5 +12,6 @@ urlpatterns = [
     path('rooms/<int:room_id>/messages/', views.room_messages_view, name='room-messages'),
     path('rooms/<int:room_id>/join/', views.join_room_view, name='join-room'),
     path('rooms/<int:room_id>/close/', views.close_room_view, name='close-room'),
+    path('rooms/<int:room_id>/attachments/', views.upload_attachment_view, name='upload-attachment'),
     path('staff/dashboard/', views.staff_dashboard_view, name='staff-dashboard'),
 ] + router.urls
