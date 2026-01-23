@@ -53,12 +53,27 @@ class RoomSerializer(serializers.ModelSerializer):
         return obj.participants.filter(is_active=True).count()
 
     def get_is_staff_online(self, obj):
-        if not obj.staff_assigned:
-            return False
-        # Check if staff has an active support room
+        # Logic: Check if ANY staff is online for this room type.
+        # This prevents "Away status" if one staff leaves but another is there.
         try:
-            return obj.staff_assigned.active_support_room.is_active
-        except:
+             # Determine needed room type
+             needed_type = 'all'
+             if obj.client:
+                 if obj.client.user_type == 'player':
+                     needed_type = 'player'
+                 elif obj.client.user_type == 'agent':
+                     needed_type = 'agent'
+             
+             # Check if any ACTIVE support room exists that handles this type
+             # 'all' handles everything. Specific handles specific.
+             # So we look for SupportRoom where (type=needed OR type='all') AND is_active=True
+             from .models import SupportRoom
+             return SupportRoom.objects.filter(
+                 is_active=True,
+                 room_type__in=[needed_type, 'all']
+             ).exists()
+        except Exception as e:
+            # Fallback
             return False
 
 
