@@ -42,14 +42,24 @@ class RoomSerializer(serializers.ModelSerializer):
     participant_count = serializers.SerializerMethodField()
     
     unread_count = serializers.IntegerField(read_only=True)
+    is_staff_online = serializers.SerializerMethodField()
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participant_count', 'unread_count']
+        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participant_count', 'unread_count', 'is_staff_online']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
         return obj.participants.filter(is_active=True).count()
+
+    def get_is_staff_online(self, obj):
+        if not obj.staff_assigned:
+            return False
+        # Check if staff has an active support room
+        try:
+            return obj.staff_assigned.active_support_room.is_active
+        except:
+            return False
 
 
 class RoomDetailSerializer(serializers.ModelSerializer):
