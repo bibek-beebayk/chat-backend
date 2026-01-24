@@ -51,6 +51,9 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
         user = request.user
         
         if room.staff == user:
+            # CRITICAL: Unassign staff from all open chats to allow handover
+            Room.objects.filter(current_handler=user, status='OPEN').update(current_handler=None)
+            
             room.staff = None
             room.is_active = False
             room.save()
@@ -64,14 +67,12 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
 def room_list_view(request):
     """
     Get list of available rooms.
-    Staff users see all active client rooms.
+    Staff users see all OPEN rooms in their queue.
     Players and agents see only their own room (creating it if needed).
     """
     user = request.user
     
     if user.user_type == 'staff':
-        # Staff sees all rooms (active for assigned, inactive for unassigned/pending)
-        # Ordered by status (active first) then creation date
         # Get staff's active support room to filter chats
         try:
             active_support_room = user.active_support_room
@@ -79,12 +80,8 @@ def room_list_view(request):
         except SupportRoom.DoesNotExist:
             room_type = 'all'
 
-        # Filter logic
-        # If General Support ('all') or no room, show everything
-        # If Player Support, show only player chats
-        # If Agent Support, show only agent chats
+        base_query = Room.objects.filter(status='OPEN')
         
-        base_query = Room.objects.all()
         if room_type == 'player':
             base_query = base_query.filter(client__user_type='player')
         elif room_type == 'agent':
@@ -95,39 +92,21 @@ def room_list_view(request):
                 'messages',
                 filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
             )
-        ).order_by('-is_active', '-unread_count', '-created_at')
+        ).order_by('-status', '-unread_count', '-created_at')
     else:
         # Players and Agents get their single unique room
         # Get or create logic
         room, created = Room.objects.get_or_create(
             client=user,
-            defaults={'is_active': True}
+            defaults={'status': 'OPEN'}
         )
         
-        # If created or currently unassigned, try to assign to an active staff member
-        if not room.staff_assigned:
-            # Find active support room with least load
-            # We look for staff in active SupportRooms
-            # Then we count how many active Rooms (chats) they are already assigned to
-            
-            # Get staff active in support rooms
-            # Annotate with the count of their CURRENTLY ACTIVE assigned chat rooms
-            active_staff = User.objects.filter(
-                active_support_room__is_active=True
-            ).annotate(
-                active_chat_count=Count('assigned_rooms', filter=Q(assigned_rooms__is_active=True))
-            ).order_by('active_chat_count')
-            
-            if active_staff.exists():
-                # Pick the one with the least active chats
-                selected_staff = active_staff.first()
-                room.staff_assigned = selected_staff
-                room.save()
-
-        # If it was inactive, reactivate it? Or keep as is.
-        # Assuming one active room concept.
-        if not room.is_active:
-            room.is_active = True
+        # If it was CLOSED, reopen it?
+        # User requirement says "Conversations survive...". 
+        # But if a user returns, they might want to ask a new question.
+        # Since we have one-to-one, we probably just reopen it.
+        if room.status == 'CLOSED':
+            room.status = 'OPEN'
             room.save()
             
         # Manually annotate unread count for serializer compatibility
@@ -212,10 +191,6 @@ def upload_attachment_view(request, room_id):
     channel_layer = get_channel_layer()
     room_group_name = f'chat_{room_id}'
     
-    # Construct attachment URL manually if needed, or rely on serializer
-    # Serializer 'attachment' field will provide the full URL if context is passed, 
-    # but here we are in a view, so we can use the serializer.
-    
     msg_data = MessageSerializer(message, context={'request': request}).data
     
     async_to_sync(channel_layer.group_send)(
@@ -240,7 +215,7 @@ def join_room_view(request, room_id):
     """
     Join a room.
     For clients, this is just a check/confirmation.
-    For staff, this might mark them as 'viewing'.
+    For staff, this assigns 'current_handler' if empty.
     """
     room = get_object_or_404(Room, id=room_id)
     user = request.user
@@ -249,11 +224,14 @@ def join_room_view(request, room_id):
     if user.user_type != 'staff' and room.client != user:
         return Response({'error': 'Not authorized to join this room'}, status=status.HTTP_403_FORBIDDEN)
     
-    # If staff joins an unassigned room, assign it to them
-    if user.user_type == 'staff' and not room.staff_assigned:
-        room.staff_assigned = user
-        room.is_active = True
-        room.save()
+    # If staff joins:
+    if user.user_type == 'staff':
+        # If open but no current handler, claim it
+        if not room.current_handler:
+            room.current_handler = user
+            room.save()
+        # If already handled by someone else, we just join as a participant (viewing/assisting)
+        # Requirement: "Allow the new staff to reply seamlessly as continuation."
 
     participant, created = RoomParticipant.objects.get_or_create(
         room=room,
@@ -285,10 +263,12 @@ def close_room_view(request, room_id):
     if user.user_type != 'staff':
          return Response({'error': 'Only staff can close rooms'}, status=status.HTTP_403_FORBIDDEN)
          
-    if room.staff_assigned != user:
-        return Response({'error': 'You are not assigned to this room'}, status=status.HTTP_403_FORBIDDEN)
+    # Optional: Enforce only current handler can close?
+    # if room.current_handler != user:
+    #    return Response({'error': 'You are not the current handler'}, status=status.HTTP_403_FORBIDDEN)
         
-    room.is_active = False
+    room.status = 'CLOSED'
+    room.current_handler = None # Clear handler on close logic
     room.save()
     
     return Response({'status': 'closed', 'message': 'Chat resolved'})
@@ -310,24 +290,22 @@ def staff_dashboard_view(request):
         )
     
     # Determine scope based on available support room
-    # If staff is in 'Player Support', show all player rooms
     try:
         active_support_room = user.active_support_room
         room_type = active_support_room.room_type
     except SupportRoom.DoesNotExist:
         room_type = None
 
-    base_query = Room.objects.filter(is_active=True)
+    base_query = Room.objects.filter(status='OPEN')
     
     if room_type:
         if room_type == 'player':
             base_query = base_query.filter(client__user_type='player')
         elif room_type == 'agent':
             base_query = base_query.filter(client__user_type='agent')
-        # 'all' implies no filter on client type
     else:
         # Fallback: only show rooms explicitly assigned if not in a support station
-        base_query = base_query.filter(staff_assigned=user)
+        base_query = base_query.filter(current_handler=user)
     
     relevant_rooms = base_query
     

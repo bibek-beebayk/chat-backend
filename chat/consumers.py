@@ -147,7 +147,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def check_room_exists(self):
         """Check if room exists."""
-        return Room.objects.filter(id=self.room_id, is_active=True).exists()
+        return Room.objects.filter(id=self.room_id, status='OPEN').exists()
     
     @database_sync_to_async
     def save_message(self, content):

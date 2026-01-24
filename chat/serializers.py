@@ -37,7 +37,7 @@ class RoomParticipantSerializer(serializers.ModelSerializer):
 
 class RoomSerializer(serializers.ModelSerializer):
     """Serializer for Room model."""
-    staff_assigned = UserSerializer(read_only=True)
+    current_handler = UserSerializer(read_only=True)
     client = UserSerializer(read_only=True)
     participant_count = serializers.SerializerMethodField()
     
@@ -46,7 +46,7 @@ class RoomSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participant_count', 'unread_count', 'is_staff_online']
+        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
@@ -79,14 +79,14 @@ class RoomSerializer(serializers.ModelSerializer):
 
 class RoomDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for Room model with participants and recent messages."""
-    staff_assigned = UserSerializer(read_only=True)
+    current_handler = UserSerializer(read_only=True)
     client = UserSerializer(read_only=True)
     participants = RoomParticipantSerializer(many=True, read_only=True)
     recent_messages = serializers.SerializerMethodField()
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'staff_assigned', 'client', 'created_at', 'is_active', 'participants', 'recent_messages']
+        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participants', 'recent_messages']
         read_only_fields = ['id', 'created_at']
     
     def get_recent_messages(self, obj):

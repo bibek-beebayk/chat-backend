@@ -42,7 +42,7 @@ class Room(models.Model):
         null=True,
         blank=True
     )
-    staff_assigned = models.ForeignKey(
+    current_handler = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
@@ -51,7 +51,7 @@ class Room(models.Model):
         limit_choices_to={'user_type': 'staff'}
     )
     created_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
+    status = models.CharField(max_length=10, choices=(('OPEN', 'Open'), ('CLOSED', 'Closed')), default='OPEN')
     
     def __str__(self):
         client_name = self.client.username if self.client else "Unknown"
