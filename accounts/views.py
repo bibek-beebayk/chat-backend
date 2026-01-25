@@ -39,10 +39,16 @@ def login_view(request):
     if serializer.is_valid():
         user = serializer.validated_data['user']
         login(request, user)
+        
+        # Get new CSRF token after rotation
+        from django.middleware.csrf import get_token
+        token = get_token(request)
+        
         return Response(
             {
                 'message': 'Login successful',
-                'user': UserSerializer(user).data
+                'user': UserSerializer(user).data,
+                'csrfToken': token
             },
             status=status.HTTP_200_OK
         )
