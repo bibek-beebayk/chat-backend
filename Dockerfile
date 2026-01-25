@@ -22,4 +22,4 @@ COPY . .
 RUN python manage.py collectstatic --noinput || true
 
 # Start Daphne
-CMD ["sh", "-c", "daphne -b 0.0.0.0 -p $PORT project.asgi:application"]
+CMD ["sh", "-c", "daphne -b 0.0.0.0 -p $PORT chat_project.asgi:application"]
