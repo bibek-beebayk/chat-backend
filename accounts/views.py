@@ -73,3 +73,10 @@ def current_user_view(request):
         UserSerializer(request.user).data,
         status=status.HTTP_200_OK
     )
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def get_csrf_token(request):
+    return Response({'success': 'CSRF cookie set'})
