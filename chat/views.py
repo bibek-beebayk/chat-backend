@@ -189,8 +189,18 @@ def room_messages_view(request, room_id):
     # Mark unread messages as read
     Message.objects.filter(room=room, is_read=False).exclude(sender=request.user).update(is_read=True)
 
-    messages = Message.objects.filter(room=room).order_by('-timestamp')[:100]
+    # Infinite Scroll / Pagination Logic
+    before_id = request.query_params.get('before_id')
+    limit = int(request.query_params.get('limit', 20))
+    
+    messages_query = Message.objects.filter(room=room).order_by('-timestamp')
+    
+    if before_id:
+        messages_query = messages_query.filter(id__lt=before_id)
+        
+    messages = messages_query[:limit]
     messages = list(reversed(messages))  # Reverse to show oldest first
+    
     serializer = MessageSerializer(messages, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
