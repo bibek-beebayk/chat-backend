@@ -22,14 +22,28 @@ DATABASES = {
 }
 
 # Production Channels (Expects Env Vars for Redis)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [(os.environ.get('REDISHOST'), os.environ.get('REDISPORT', 6379))],
+# Check for REDIS_URL (Railway standard) or fallback to host/port
+REDIS_URL = os.environ.get('REDIS_URL')
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [REDIS_URL],
+            },
         },
-    },
-}
+    }
+else:
+    # Fallback to granular variables
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                "hosts": [(os.environ.get('REDISHOST', 'localhost'), os.environ.get('REDISPORT', 6379))],
+            },
+        },
+    }
 
 # Security Enhancements
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
