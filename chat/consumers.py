@@ -143,6 +143,32 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'username': event['username'],
             'user_id': event['user_id']
         }))
+
+    async def chat_message_update(self, event):
+        """Send message update notification."""
+        await self.send(text_data=json.dumps({
+            'type': 'chat_message_update',
+            'message_id': event['id'],
+            'message': event['content'],
+            'is_edited': event['is_edited'],
+            'edited_at': event['edited_at']
+        }))
+
+    async def chat_message_delete(self, event):
+        """Send message delete notification."""
+        await self.send(text_data=json.dumps({
+            'type': 'chat_message_delete',
+            'message_id': event['id'],
+            'is_deleted': event['is_deleted']
+        }))
+        
+    async def chat_message_pin(self, event):
+        """Send message pin notification."""
+        await self.send(text_data=json.dumps({
+            'type': 'chat_message_pin',
+            'message_id': event['id'],
+            'is_pinned': event['is_pinned']
+        }))
     
     @database_sync_to_async
     def check_room_exists(self):

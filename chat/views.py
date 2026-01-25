@@ -1,6 +1,7 @@
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Count, Max
@@ -14,6 +15,9 @@ from .serializers import (
     SupportRoomSerializer
 )
 from django.contrib.auth import get_user_model
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
+
 User = get_user_model()
 
 
@@ -232,11 +236,9 @@ def upload_attachment_view(request, room_id):
         return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Create Message with attachment
-    # Note: Content is optional if we have an attachment, but good to have a fallback text
+    # Content is optional if we have an attachment. We leave it empty if not provided.
     content = request.data.get('content', '')
-    if not content:
-        content = f"Sent a file: {file_obj.name}"
-
+    
     message = Message.objects.create(
         room=room,
         sender=user,
@@ -245,9 +247,6 @@ def upload_attachment_view(request, room_id):
     )
 
     # Broadcast via WebSocket
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
-    
     channel_layer = get_channel_layer()
     room_group_name = f'chat_{room_id}'
     
@@ -267,6 +266,98 @@ def upload_attachment_view(request, room_id):
     )
 
     return Response(msg_data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def edit_message(request, message_id):
+    message = get_object_or_404(Message, id=message_id)
+    
+    # Permission check: Only sender can edit, or maybe staff can edit all?
+    # Let's say only sender for now.
+    if message.sender != request.user:
+         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    new_content = request.data.get('content')
+    if new_content is not None:
+        message.content = new_content
+        message.is_edited = True
+        message.edited_at = timezone.now()
+        message.save()
+
+        # Broadcast update
+        channel_layer = get_channel_layer()
+        room_group_name = f'chat_{message.room.id}'
+        async_to_sync(channel_layer.group_send)(
+            room_group_name,
+            {
+                'type': 'chat_message_update', 
+                'id': message.id,
+                'content': message.content,
+                'is_edited': True,
+                'edited_at': message.edited_at.isoformat()
+            }
+        )
+        
+        return Response(MessageSerializer(message, context={'request': request}).data)
+    return Response({'error': 'No content provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_message(request, message_id):
+    message = get_object_or_404(Message, id=message_id)
+    
+    if message.sender != request.user:
+         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Soft delete
+    message.is_deleted = True
+    message.content = "This message was deleted."
+    message.attachment = None # Remove attachment on delete
+    message.save()
+
+    # Broadcast update
+    channel_layer = get_channel_layer()
+    room_group_name = f'chat_{message.room.id}'
+    async_to_sync(channel_layer.group_send)(
+        room_group_name,
+        {
+            'type': 'chat_message_delete', 
+            'id': message.id,
+            'is_deleted': True
+        }
+    )
+    return Response({'status': 'deleted'})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def pin_message(request, message_id):
+    message = get_object_or_404(Message, id=message_id)
+    
+    # Any participant can pin? Or just staff? Let's allow any participant for now.
+    # Check if user is in room
+    is_staff = request.user.user_type == 'staff'
+    is_room_client = message.room.client == request.user
+    
+    if not (is_staff or is_room_client):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+    message.is_pinned = not message.is_pinned
+    message.save()
+
+    # Broadcast update
+    channel_layer = get_channel_layer()
+    room_group_name = f'chat_{message.room.id}'
+    async_to_sync(channel_layer.group_send)(
+        room_group_name,
+        {
+            'type': 'chat_message_pin',
+            'id': message.id,
+            'is_pinned': message.is_pinned
+        }
+    )
+    
+    return Response({'status': 'pinned', 'is_pinned': message.is_pinned})
 
 
 @api_view(['POST'])
