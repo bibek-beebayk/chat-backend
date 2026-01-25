@@ -17,11 +17,15 @@ from chat import routing
 
 django_asgi_app = get_asgi_application()
 
+from chat.middleware import QueryAuthMiddleware
+
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
-    "websocket": AuthMiddlewareStack(
-        URLRouter(
-            routing.websocket_urlpatterns
+    "websocket": QueryAuthMiddleware(
+        AuthMiddlewareStack(
+            URLRouter(
+                routing.websocket_urlpatterns
+            )
         )
     ),
 })
