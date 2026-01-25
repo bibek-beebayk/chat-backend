@@ -79,4 +79,6 @@ def current_user_view(request):
 @permission_classes([AllowAny])
 @ensure_csrf_cookie
 def get_csrf_token(request):
-    return Response({'success': 'CSRF cookie set'})
+    from django.middleware.csrf import get_token
+    token = get_token(request)
+    return Response({'success': 'CSRF cookie set', 'csrfToken': token})
