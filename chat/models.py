@@ -50,6 +50,13 @@ class Room(models.Model):
         related_name='assigned_rooms',
         limit_choices_to={'user_type': 'staff'}
     )
+    queue = models.ForeignKey(
+        'SupportRoom',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='queued_chats'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=(('OPEN', 'Open'), ('CLOSED', 'Closed')), default='OPEN')
     

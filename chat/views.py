@@ -3,7 +3,8 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Count
+from django.db.models import Q, Count, Max
+from django.db.models.functions import Coalesce
 from .models import Room, Message, RoomParticipant, SupportRoom
 from .serializers import (
     RoomSerializer,
@@ -76,37 +77,59 @@ def room_list_view(request):
         # Get staff's active support room to filter chats
         try:
             active_support_room = user.active_support_room
-            room_type = active_support_room.room_type
         except SupportRoom.DoesNotExist:
-            room_type = 'all'
+            return Response([], status=status.HTTP_200_OK)
 
-        base_query = Room.objects.filter(status='OPEN')
-        
-        if room_type == 'player':
-            base_query = base_query.filter(client__user_type='player')
-        elif room_type == 'agent':
-            base_query = base_query.filter(client__user_type='agent')
+        # Filter by QUEUE (Load Balancer)
+        base_query = Room.objects.filter(status='OPEN', queue=active_support_room)
             
         rooms = base_query.annotate(
             unread_count=Count(
                 'messages',
                 filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
-            )
-        ).order_by('-status', '-unread_count', '-created_at')
+            ),
+            last_activity=Coalesce(Max('messages__timestamp'), 'created_at')
+        ).order_by('-status', '-unread_count', '-last_activity')
     else:
         # Players and Agents get their single unique room
-        # Get or create logic
         room, created = Room.objects.get_or_create(
             client=user,
             defaults={'status': 'OPEN'}
         )
         
+        # Load Balancing / Routing Logic
+        # Check if queue needs assignment OR Re-assignment (Dynamic Re-routing)
+        needs_routing = False
+        if not room.queue:
+            needs_routing = True
+        elif not room.queue.is_active:
+             # Queue is inactive (staff left), re-route to an active one!
+             needs_routing = True
+             
+        if needs_routing:
+            # Find candidate rooms
+            candidates = SupportRoom.objects.filter(is_active=True)
+            if user.user_type == 'player':
+                candidates = candidates.filter(room_type__in=['player', 'all'])
+            elif user.user_type == 'agent':
+                candidates = candidates.filter(room_type__in=['agent', 'all'])
+            
+            # Annotate with load (OPEN queued chats)
+            candidates = candidates.annotate(
+                load=Count('queued_chats', filter=Q(queued_chats__status='OPEN'))
+            ).order_by('load')
+            
+            if candidates.exists():
+                room.queue = candidates.first()
+                room.save()
+
         # If it was CLOSED, reopen it?
-        # User requirement says "Conversations survive...". 
-        # But if a user returns, they might want to ask a new question.
-        # Since we have one-to-one, we probably just reopen it.
         if room.status == 'CLOSED':
             room.status = 'OPEN'
+            # Re-route if queue became inactive? 
+            # Ideally yes, but simpler to keep sticky for now unless explicitly requested.
+            # If queue is inactive, maybe re-route?
+            # Let's keep it sticky for "Permanent assignment" per user request.
             room.save()
             
         # Manually annotate unread count for serializer compatibility
@@ -129,6 +152,15 @@ def room_detail_view(request, room_id):
     if request.user.user_type != 'staff' and room.client != request.user:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
+    # Staff can only see rooms in their active queue
+    if request.user.user_type == 'staff':
+        try:
+             active_support_room = request.user.active_support_room
+             if room.queue and room.queue != active_support_room:
+                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
+        except SupportRoom.DoesNotExist:
+             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+        
     serializer = RoomDetailSerializer(room, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -144,6 +176,15 @@ def room_messages_view(request, room_id):
     # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    # Staff can only see rooms in their active queue
+    if request.user.user_type == 'staff':
+        try:
+             active_support_room = request.user.active_support_room
+             if room.queue and room.queue != active_support_room:
+                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
+        except SupportRoom.DoesNotExist:
+             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
 
     # Mark unread messages as read
     Message.objects.filter(room=room, is_read=False).exclude(sender=request.user).update(is_read=True)
@@ -166,6 +207,15 @@ def upload_attachment_view(request, room_id):
     # Permission check
     if user.user_type != 'staff' and room.client != user:
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        
+    # Staff can only upload to rooms in their active queue
+    if user.user_type == 'staff':
+        try:
+             active_support_room = user.active_support_room
+             if room.queue != active_support_room:
+                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
+        except SupportRoom.DoesNotExist:
+             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
 
     file_obj = request.FILES.get('file')
     if not file_obj:

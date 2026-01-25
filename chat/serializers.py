@@ -44,9 +44,11 @@ class RoomSerializer(serializers.ModelSerializer):
     unread_count = serializers.IntegerField(read_only=True)
     is_staff_online = serializers.SerializerMethodField()
     
+    queue = serializers.PrimaryKeyRelatedField(read_only=True)
+    
     class Meta:
         model = Room
-        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online']
+        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
@@ -84,10 +86,12 @@ class RoomDetailSerializer(serializers.ModelSerializer):
     participants = RoomParticipantSerializer(many=True, read_only=True)
     recent_messages = serializers.SerializerMethodField()
     
+    queue = serializers.PrimaryKeyRelatedField(read_only=True)
+    
     class Meta:
         model = Room
-        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participants', 'recent_messages']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'name', 'client', 'current_handler', 'status', 'created_at', 'unread_count', 'messages', 'queue']
+        read_only_fields = ['id', 'created_at', 'messages']
     
     def get_recent_messages(self, obj):
         messages = obj.messages.all()[:50]
