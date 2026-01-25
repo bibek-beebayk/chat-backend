@@ -10,8 +10,8 @@ class SupportRoomSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = SupportRoom
-        fields = ['id', 'name', 'staff', 'is_active']
-        read_only_fields = ['id', 'is_active']
+        fields = ['id', 'name', 'staff', 'is_active', 'room_type']
+        read_only_fields = ['id', 'is_active', 'room_type']
 
 
 
