@@ -44,5 +44,15 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
 # CORS/CSRF (Restrictive)
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
-CSRF_TRUSTED_ORIGINS = os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app"]
+CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app"]
+
+# Static Files (Whitenoise)
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
