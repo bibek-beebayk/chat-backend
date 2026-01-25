@@ -14,7 +14,8 @@ class MessageAdmin(admin.ModelAdmin):
     list_display = ['id', 'room', 'sender', 'content_preview', 'timestamp', 'is_read']
     list_filter = ['room', 'is_read', 'timestamp']
     search_fields = ['content', 'sender__username']
-    
+    ordering = ['-timestamp']
+
     def content_preview(self, obj):
         return obj.content[:50]
     content_preview.short_description = 'Content'
