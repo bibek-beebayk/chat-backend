@@ -18,8 +18,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Project files
 COPY . .
 
-# Collect static (if needed)
-RUN python manage.py collectstatic --noinput || true
+# Copy entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
-# Start Daphne
-CMD ["sh", "-c", "daphne -b 0.0.0.0 -p $PORT chat_project.asgi:application"]
+# Expose port (Railway injects $PORT)
+EXPOSE 8000
+
+# Start container with entrypoint
+CMD ["/app/entrypoint.sh"]
