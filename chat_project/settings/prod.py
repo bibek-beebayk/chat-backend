@@ -6,7 +6,11 @@ SECRET_KEY = 'ih(u#bi@vd-0jog$myq824vrh9j5+*!2_w12)$u1x-29khfx%6'
 DEBUG = False
 
 # Require ALLOWED_HOSTS for production
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',')
+ALLOWED_HOSTS = os.environ.get(
+    "ALLOWED_HOSTS",
+    "chat-backend-production-c7cd.up.railway.app"
+).split(",")
+
 
 # Production Database (Expects Env Vars)
 DATABASES = {
@@ -31,7 +35,9 @@ CHANNEL_LAYERS = {
 }
 
 # Security Enhancements
-SECURE_SSL_REDIRECT = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+SECURE_SSL_REDIRECT = False
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True
