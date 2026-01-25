@@ -1,20 +1,15 @@
-"""
-Django settings for chat_project project.
-"""
-
 from pathlib import Path
 import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Updated for settings/base.py structure (3 parents up)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-your-secret-key-change-in-production'
+# Quick-start development settings - unsuitable for production
+# See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'betunnel.worldstories.net', '*']
+ALLOWED_HOSTS = []
 
 # Application definition
 INSTALLED_APPS = [
@@ -65,29 +60,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'chat_project.wsgi.application'
 ASGI_APPLICATION = 'chat_project.asgi.application'
 
-# Database
-DATABASES = {
-        "default": {
-                "ENGINE": "django.db.backends.postgresql_psycopg2",
-                        "NAME": os.environ.get("PGDATABASE", "chat_db"),
-                                "USER": os.environ.get("PGUSER", "postgres"),
-                                        "PASSWORD": os.environ.get("PGPASSWORD", "postgres"),
-                                                "HOST": os.environ.get("PGHOST", ""),
-                                                        "PORT": os.environ.get("PGPORT", ""),
-                                                                "ATOMIC_REQUESTS": True,
-                                                                    }
-                                                                    }
-
-# Channels configuration
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [(os.environ.get('REDIS_HOST', 'localhost'), 6379)],
-        },
-    },
-}
-
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -128,40 +100,8 @@ AUTH_USER_MODEL = 'accounts.User'
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.SessionAuthentication',
-        # 'rest_framework.authentication.BasicAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
 }
-
-# CORS settings
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://betunnel.worldstories.net",
-    "https://chatfe.worldstories.net"
-]
-
-CORS_ALLOW_CREDENTIALS = True
-
-# CSRF settings
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://betunnel.worldstories.net",
-    "https://chatfe.worldstories.net"
-]
-
-# Session settings
-# Session settings
-SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = True  # Set to True in production with HTTPS
-SESSION_COOKIE_DOMAIN = '.worldstories.net'
-
-# CSRF settings
-CSRF_COOKIE_SECURE = True
-CSRF_COOKIE_HTTPONLY = False # Frontend needs to read this
-CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_DOMAIN = '.worldstories.net'
