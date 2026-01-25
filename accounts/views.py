@@ -48,7 +48,8 @@ def login_view(request):
             {
                 'message': 'Login successful',
                 'user': UserSerializer(user).data,
-                'csrfToken': token
+                'csrfToken': token,
+                'sessionKey': request.session.session_key
             },
             status=status.HTTP_200_OK
         )
