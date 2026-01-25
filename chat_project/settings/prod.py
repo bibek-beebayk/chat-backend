@@ -66,14 +66,31 @@ CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://cha
 CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app"]
 
 # Static Files (Whitenoise)
+# Static Files (Whitenoise) & Media Files (Cloudflare R2)
 STORAGES = {
     "default": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "endpoint_url": os.environ.get("AWS_S3_ENDPOINT_URL"),
+            "access_key": os.environ.get("AWS_ACCESS_KEY_ID"),
+            "secret_key": os.environ.get("AWS_SECRET_ACCESS_KEY"),
+            "bucket_name": os.environ.get("AWS_STORAGE_BUCKET_NAME"),
+            "region_name": "auto",  # R2 uses 'auto'
+            "default_acl": None,    # R2 doesn't support ACLs usually
+            "signature_version": "s3v4",
+            "querystring_auth": True, # Presigned URLs for private files
+        },
     },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
+
+# AWS / Cloudflare R2 Settings keys (for completeness if backend relies on them globally)
+AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY")
+AWS_STORAGE_BUCKET_NAME = os.environ.get("AWS_STORAGE_BUCKET_NAME")
+AWS_S3_ENDPOINT_URL = os.environ.get("AWS_S3_ENDPOINT_URL")
 
 
 import sentry_sdk
