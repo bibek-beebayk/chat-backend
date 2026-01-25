@@ -7,3 +7,4 @@ psycopg[binary]
 redis==5.0.1
 daphne==4.0.0
 whitenoise==6.6.0
+sentry_sdk[django]
