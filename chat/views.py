@@ -547,3 +547,61 @@ def staff_dashboard_view(request):
         },
         'recent_messages': MessageSerializer(recent_messages, many=True, context={'request': request}).data
     }, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def switch_station_view(request):
+    """
+    Allows a client (player/agent) to switch their support station (queue)
+    to another active station of the same type.
+    """
+    user = request.user
+    if user.user_type == 'staff':
+        return Response({'error': 'Staff cannot switch stations this way'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Get user's room
+    try:
+        room = Room.objects.get(client=user)
+    except Room.DoesNotExist:
+        return Response({'error': 'No active chat room found'}, status=status.HTTP_404_NOT_FOUND)
+
+    current_queue = room.queue
+    if not current_queue:
+        return Response({'error': 'You are not assigned to a station'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Find alternative ACTIVE stations of the same type
+    # Must be active (staff assigned) and not the current one
+    alternatives = SupportRoom.objects.filter(
+        room_type=current_queue.room_type,
+        is_active=True,
+        staff__isnull=False
+    ).exclude(id=current_queue.id)
+
+    if not alternatives.exists():
+        return Response({'error': 'No other support stations are currently available'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Pick one (randomly or first)
+    # Simple logic: just pick the first one for now, or random
+    import random
+    new_queue = random.choice(list(alternatives))
+
+    # Re-assign
+    room.queue = new_queue
+    # clear current handler if any, so new staff sees it as fresh? 
+    # Or keep it? Usually if switching station, you want a new handler.
+    room.current_handler = None 
+    room.save()
+
+    # Create a system message?
+    Message.objects.create(
+        room=room,
+        sender=user, # Or system?
+        content=f"System: Switched support station to {new_queue.name}",
+        is_read=True
+    )
+
+    return Response({
+        'status': 'switched',
+        'new_station': new_queue.name,
+        'message': f"You have been moved to {new_queue.name}"
+    })

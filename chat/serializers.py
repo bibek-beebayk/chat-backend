@@ -45,10 +45,12 @@ class RoomSerializer(serializers.ModelSerializer):
     is_staff_online = serializers.SerializerMethodField()
     
     queue = serializers.PrimaryKeyRelatedField(read_only=True)
+    queue_name = serializers.CharField(source='queue.name', read_only=True)
+    can_switch_station = serializers.SerializerMethodField()
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue']
+        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue', 'queue_name', 'can_switch_station']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
@@ -56,27 +58,43 @@ class RoomSerializer(serializers.ModelSerializer):
 
     def get_is_staff_online(self, obj):
         # Logic: Check if ANY staff is online for this room type.
-        # This prevents "Away status" if one staff leaves but another is there.
         try:
-             # Determine needed room type
-             needed_type = 'all'
-             if obj.client:
-                 if obj.client.user_type == 'player':
-                     needed_type = 'player'
-                 elif obj.client.user_type == 'agent':
-                     needed_type = 'agent'
-             
-             # Check if any ACTIVE support room exists that handles this type
-             # 'all' handles everything. Specific handles specific.
-             # So we look for SupportRoom where (type=needed OR type='all') AND is_active=True
-             from .models import SupportRoom
-             return SupportRoom.objects.filter(
+            from .models import SupportRoom
+            if obj.queue:
+                # Check if anyone is handling this type of queue (load balancing)
+                # Or just check if THIS queue is active? 
+                # Let's say: Is there ANY active queue of this type?
+                return SupportRoom.objects.filter(
+                    room_type=obj.queue.room_type,
+                    is_active=True,
+                    staff__isnull=False
+                ).exists()
+                
+            # Fallback if no queue assigned yet (e.g. new room)
+            needed_type = 'all'
+            if obj.client:
+                 if obj.client.user_type == 'player': needed_type = 'player'
+                 elif obj.client.user_type == 'agent': needed_type = 'agent'
+            
+            return SupportRoom.objects.filter(
+                 room_type__in=[needed_type, 'all'],
                  is_active=True,
-                 room_type__in=[needed_type, 'all']
-             ).exists()
-        except Exception as e:
-            # Fallback
+                 staff__isnull=False
+            ).exists()
+        except:
             return False
+
+    def get_can_switch_station(self, obj):
+        if not obj.queue:
+            return False
+            
+        # Check if there are OTHER active stations of the same type
+        from .models import SupportRoom
+        return SupportRoom.objects.filter(
+            room_type=obj.queue.room_type,
+            is_active=True,
+            staff__isnull=False
+        ).exclude(id=obj.queue.id).exists()
 
 
 class RoomDetailSerializer(serializers.ModelSerializer):

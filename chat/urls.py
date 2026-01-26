@@ -18,4 +18,5 @@ urlpatterns = [
     path('messages/<int:message_id>/delete/', views.delete_message, name='delete-message'),
     path('messages/<int:message_id>/pin/', views.pin_message, name='pin-message'),
     path('staff/dashboard/', views.staff_dashboard_view, name='staff-dashboard'),
+    path('rooms/switch-station/', views.switch_station_view, name='switch-station'),
 ] + router.urls
