@@ -18,6 +18,11 @@ class User(AbstractUser):
         default='player',
         help_text='Type of user: player, agent, or staff'
     )
+
+    is_verified = models.BooleanField(
+        default=False,
+        help_text='Designates whether this user has verified their account.'
+    )
     
     def __str__(self):
         return f"{self.username} ({self.get_user_type_display()})"
