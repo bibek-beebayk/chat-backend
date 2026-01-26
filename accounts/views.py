@@ -89,3 +89,36 @@ def get_csrf_token(request):
     from django.middleware.csrf import get_token
     token = get_token(request)
     return Response({'success': 'CSRF cookie set', 'csrfToken': token})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password_view(request):
+    """
+    Change user password.
+    """
+    from .serializers import ChangePasswordSerializer
+    
+    serializer = ChangePasswordSerializer(data=request.data)
+    if serializer.is_valid():
+        user = request.user
+        if not user.check_password(serializer.data.get('old_password')):
+            return Response(
+                {'old_password': ['Wrong password.']}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        user.set_password(serializer.data.get('new_password'))
+        user.save()
+        # Updating the password logs out all other sessions, but we want to keep this one?
+        # Standard Django behavior cycles session key. 'login' function does this.
+        # To prevent logout, we re-authenticate the session (Django < 3 requires manual update, > 3 handles it?)
+        # For simplicity in DRF/Session auth, let's re-login the user to update the session hash.
+        login(request, user)
+        
+        return Response(
+            {'message': 'Password changed successfully'},
+            status=status.HTTP_200_OK
+        )
+        
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

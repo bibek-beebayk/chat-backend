@@ -102,10 +102,15 @@ AUTH_USER_MODEL = 'accounts.User'
 # REST Framework configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'accounts.authentication.SessionTokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
+    ],
+    'EXCEPTION_HANDLER': 'chat_project.exceptions.custom_exception_handler',
+    'DEFAULT_RENDERER_CLASSES': [
+        'chat_project.renderers.StandardResponseRenderer',
+        'rest_framework.renderers.BrowsableAPIRenderer',
     ],
 }

@@ -53,5 +53,18 @@ class LoginSerializer(serializers.Serializer):
         else:
             raise serializers.ValidationError("Must include username and password.")
         
+        
         data['user'] = user
+        return data
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer for password change."""
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True, min_length=6)
+    confirm_new_password = serializers.CharField(required=True)
+    
+    def validate(self, data):
+        if data['new_password'] != data['confirm_new_password']:
+            raise serializers.ValidationError({"confirm_new_password": "New passwords do not match."})
         return data
