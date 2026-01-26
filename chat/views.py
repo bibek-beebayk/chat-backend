@@ -195,17 +195,84 @@ def room_messages_view(request, room_id):
 
     # Infinite Scroll / Pagination Logic
     before_id = request.query_params.get('before_id')
+    after_id = request.query_params.get('after_id')
+    around_id = request.query_params.get('around_id')
     limit = int(request.query_params.get('limit', 20))
     
     messages_query = Message.objects.filter(room=room).order_by('-timestamp')
     
-    if before_id:
-        messages_query = messages_query.filter(id__lt=before_id)
+    if around_id:
+        # Fetch context around a message
+        # We try to get limit/2 before and limit/2 after
+        try:
+            target_msg = Message.objects.get(id=around_id, room=room)
+            
+            # Context before (older)
+            older = list(Message.objects.filter(
+                room=room, 
+                timestamp__lte=target_msg.timestamp
+            ).exclude(id=target_msg.id).order_by('-timestamp')[:limit//2])
+            
+            # Context after (newer)
+            newer = list(Message.objects.filter(
+                room=room, 
+                timestamp__gte=target_msg.timestamp
+            ).exclude(id=target_msg.id).order_by('timestamp')[:limit//2])
+            
+            # Combine: older(reversed) + target + newer
+            messages = list(reversed(older)) + [target_msg] + newer
+            
+            # Since we manually built the list, no need to query further
+        except Message.DoesNotExist:
+             return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    elif after_id:
+        # Fetch newer messages (Scroll Down)
+        # Note: We order by timestamp ASC here to get the immediate next messages
+        messages = list(Message.objects.filter(
+            room=room, 
+            id__gt=after_id
+        ).order_by('timestamp')[:limit])
         
-    messages = messages_query[:limit]
-    messages = list(reversed(messages))  # Reverse to show oldest first
+    elif before_id:
+        # Fetch older messages (Scroll Up)
+        messages = list(Message.objects.filter(
+            room=room, 
+            id__lt=before_id
+        ).order_by('-timestamp')[:limit])
+        messages = list(reversed(messages)) # Show oldest first
+        
+    else:
+        # Default: Latest messages
+        messages = list(messages_query[:limit])
+        messages = list(reversed(messages)) # Show oldest first
     
     serializer = MessageSerializer(messages, many=True, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def pinned_messages_view(request, room_id):
+    """
+    Get (all) pinned messages for a room.
+    """
+    room = get_object_or_404(Room, id=room_id)
+    
+    # Permission check (same as room_messages_view)
+    if request.user.user_type != 'staff' and room.client != request.user:
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.user.user_type == 'staff':
+        try:
+             active_support_room = request.user.active_support_room
+             if room.queue and room.queue != active_support_room:
+                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
+        except SupportRoom.DoesNotExist:
+             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+
+    messages = Message.objects.filter(room=room, is_pinned=True, is_deleted=False).order_by('timestamp')
+    serializer = MessageSerializer(messages, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
