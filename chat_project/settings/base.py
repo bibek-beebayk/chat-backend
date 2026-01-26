@@ -25,6 +25,8 @@ INSTALLED_APPS = [
     'channels',
     'accounts',
     'chat',
+    'posts',
+    'ckeditor',
 ]
 
 MIDDLEWARE = [

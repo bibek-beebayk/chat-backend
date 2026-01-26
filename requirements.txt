@@ -10,3 +10,5 @@ whitenoise==6.6.0
 sentry_sdk[django]
 django-storages[s3]
 boto3
+Pillow
+django-ckeditor
