@@ -38,11 +38,13 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
             return Response({'error': 'Only staff can enter support rooms'}, status=status.HTTP_403_FORBIDDEN)
             
         if room.staff and room.staff != user:
+            # Maybe allow "hijacking" or just joining? 
+            # For now, if occupied by someone else, return error.
             return Response({'error': 'Room is occupied'}, status=status.HTTP_400_BAD_REQUEST)
             
-        # Check if user is already in another room
-        if SupportRoom.objects.filter(staff=user).exclude(id=room.id).exists():
-           return Response({'error': 'You are already in another support room'}, status=status.HTTP_400_BAD_REQUEST)
+        # Removed "already in another room" check to allow multi-room
+        # if SupportRoom.objects.filter(staff=user).exclude(id=room.id).exists():
+        #    return Response({'error': 'You are already in another support room'}, status=status.HTTP_400_BAD_REQUEST)
 
         room.staff = user
         room.is_active = True
@@ -56,8 +58,8 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
         user = request.user
         
         if room.staff == user:
-            # CRITICAL: Unassign staff from all open chats to allow handover
-            Room.objects.filter(current_handler=user, status='OPEN').update(current_handler=None)
+            # CRITICAL: Unassign staff from open chats IN THIS QUEUE ONLY
+            Room.objects.filter(current_handler=user, status='OPEN', queue=room).update(current_handler=None)
             
             room.staff = None
             room.is_active = False
@@ -78,14 +80,14 @@ def room_list_view(request):
     user = request.user
     
     if user.user_type == 'staff':
-        # Get staff's active support room to filter chats
-        try:
-            active_support_room = user.active_support_room
-        except SupportRoom.DoesNotExist:
+        # Get staff's active support roomS to filter chats
+        # Changed: fetch all active rooms
+        active_support_rooms = user.active_support_rooms.all()
+        if not active_support_rooms.exists():
             return Response([], status=status.HTTP_200_OK)
 
-        # Filter by QUEUE (Load Balancer)
-        base_query = Room.objects.filter(status='OPEN', queue=active_support_room)
+        # Filter by QUEUE (Load Balancer) - ANY of the active queues
+        base_query = Room.objects.filter(status='OPEN', queue__in=active_support_rooms)
             
         rooms = base_query.annotate(
             unread_count=Count(
@@ -158,12 +160,12 @@ def room_detail_view(request, room_id):
         
     # Staff can only see rooms in their active queue
     if request.user.user_type == 'staff':
-        try:
-             active_support_room = request.user.active_support_room
-             if room.queue and room.queue != active_support_room:
-                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
-        except SupportRoom.DoesNotExist:
-             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+        active_support_rooms = request.user.active_support_rooms.all()
+        if not active_support_rooms.exists():
+            return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+
+        if room.queue and room.queue not in active_support_rooms:
+            return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
         
     serializer = RoomDetailSerializer(room, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -183,12 +185,12 @@ def room_messages_view(request, room_id):
 
     # Staff can only see rooms in their active queue
     if request.user.user_type == 'staff':
-        try:
-             active_support_room = request.user.active_support_room
-             if room.queue and room.queue != active_support_room:
-                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
-        except SupportRoom.DoesNotExist:
-             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+        active_support_rooms = request.user.active_support_rooms.all()
+        if not active_support_rooms.exists():
+            return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+
+        if room.queue and room.queue not in active_support_rooms:
+            return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     # Mark unread messages as read
     Message.objects.filter(room=room, is_read=False).exclude(sender=request.user).update(is_read=True)
@@ -264,12 +266,12 @@ def pinned_messages_view(request, room_id):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.user.user_type == 'staff':
-        try:
-             active_support_room = request.user.active_support_room
-             if room.queue and room.queue != active_support_room:
-                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
-        except SupportRoom.DoesNotExist:
+        active_support_rooms = request.user.active_support_rooms.all()
+        if not active_support_rooms.exists():
              return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+             
+        if room.queue and room.queue not in active_support_rooms:
+             return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     messages = Message.objects.filter(room=room, is_pinned=True, is_deleted=False).order_by('timestamp')
     serializer = MessageSerializer(messages, many=True)
@@ -291,12 +293,12 @@ def upload_attachment_view(request, room_id):
         
     # Staff can only upload to rooms in their active queue
     if user.user_type == 'staff':
-        try:
-             active_support_room = user.active_support_room
-             if room.queue != active_support_room:
-                 return Response({'error': 'Room not in your queue'}, status=status.HTTP_403_FORBIDDEN)
-        except SupportRoom.DoesNotExist:
+        active_support_rooms = user.active_support_rooms.all()
+        if not active_support_rooms.exists():
              return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
+
+        if room.queue and room.queue not in active_support_rooms:
+             return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     file_obj = request.FILES.get('file')
     if not file_obj:
@@ -508,19 +510,22 @@ def staff_dashboard_view(request):
         )
     
     # Determine scope based on available support room
-    try:
-        active_support_room = user.active_support_room
-        room_type = active_support_room.room_type
-    except SupportRoom.DoesNotExist:
-        room_type = None
+    active_support_rooms = user.active_support_rooms.all()
+    room_types = [room.room_type for room in active_support_rooms]
+
+    if not active_support_rooms.exists():
+        room_types = []
 
     base_query = Room.objects.filter(status='OPEN')
     
-    if room_type:
-        if room_type == 'player':
-            base_query = base_query.filter(client__user_type='player')
-        elif room_type == 'agent':
-            base_query = base_query.filter(client__user_type='agent')
+    if room_types:
+        # Filter where room type matches ANY of the active room types
+        # Note: This is simplified. If I am in "Player Support Room A" and "Agent Support Room B",
+        # I should see player chats queues in A and agent chats queued in B.
+        # But our room_list logic already filters by queue.
+        # Dashboard wants "stats". Let's stats for ALL active rooms.
+        # We can just filter by queue__in=active_support_rooms
+        base_query = base_query.filter(queue__in=active_support_rooms)
     else:
         # Fallback: only show rooms explicitly assigned if not in a support station
         base_query = base_query.filter(current_handler=user)

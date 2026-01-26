@@ -14,12 +14,12 @@ class SupportRoom(models.Model):
     )
     name = models.CharField(max_length=100)
     room_type = models.CharField(max_length=10, choices=ROOM_TYPES, default='all')
-    staff = models.OneToOneField(
+    staff = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='active_support_room',
+        related_name='active_support_rooms',
         limit_choices_to={'user_type': 'staff'}
     )
     is_active = models.BooleanField(default=False)
