@@ -42,7 +42,9 @@ The Team
         )
         return True
     except Exception as e:
-        print(f"Error sending OTP email: {str(e)}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending OTP email: {str(e)}", exc_info=True)
         return False
 
 
