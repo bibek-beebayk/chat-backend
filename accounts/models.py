@@ -146,7 +146,7 @@ class VerificationRequest(models.Model):
     
     def approve(self, reviewed_by_user):
         """Approve the verification request and verify the user"""
-        from django.core.mail import send_mail
+        from chat_project.utils import send_zeptomail
         from django.conf import settings
 
         self.user.is_verified = True
@@ -160,19 +160,25 @@ class VerificationRequest(models.Model):
         
         # Send approval email
         try:
-            send_mail(
-                subject='Account Verification Approved',
-                message=f'Hello {self.user.username},\n\nYour account verification request has been approved. You are now a verified user.\n\nThank you for playing with us!',
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[self.user.email],
-                fail_silently=True
+            send_zeptomail(
+                self.user.email,
+                'Account Verification Approved',
+                f"""
+                <html>
+                    <body>
+                        <p>Hello {self.user.username},</p>
+                        <p>Your account verification request has been approved. You are now a verified user.</p>
+                        <p>Thank you for playing with us!</p>
+                    </body>
+                </html>
+                """
             )
         except Exception:
             pass  # Don't fail the transaction if email fails
     
     def reject(self, reviewed_by_user, notes=''):
         """Reject the verification request"""
-        from django.core.mail import send_mail
+        from chat_project.utils import send_zeptomail
         from django.conf import settings
 
         self.status = 'rejected'
@@ -189,12 +195,19 @@ class VerificationRequest(models.Model):
                 message += f'\n\nReason: {self.notes}'
             message += '\n\nPlease contact support if you have any questions.'
 
-            send_mail(
-                subject='Account Verification Update',
-                message=message,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[self.user.email],
-                fail_silently=True
+            send_zeptomail(
+                self.user.email,
+                'Account Verification Update',
+                f"""
+                <html>
+                    <body>
+                        <p>Hello {self.user.username},</p>
+                        <p>Your account verification request has been rejected.</p>
+                        <p>Reason: {self.notes if self.notes else 'No reason provided.'}</p>
+                        <p>Please contact support if you have any questions.</p>
+                    </body>
+                </html>
+                """
             )
         except Exception:
             pass  # Don't fail the transaction if email fails

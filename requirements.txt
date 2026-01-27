@@ -12,4 +12,4 @@ django-storages[s3]
 boto3
 Pillow
 django-ckeditor
-# django-zoho-zeptomail
+django-zoho-zeptomail

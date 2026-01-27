@@ -613,18 +613,24 @@ def test_email_view(request):
     """
     Test endpoint to send an email.
     """
-    from django.core.mail import send_mail
+    from chat_project.utils import send_zeptomail
     from django.conf import settings
     
     recipient = request.data.get('email', 'beebayk0001@gmail.com')
     
     try:
-        send_mail(
-            subject='Test Email from HR Agent',
-            message='This is a test email to verify SMTP configuration is working correctly.',
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[recipient],
-            fail_silently=False,
+        send_zeptomail(
+            recipient,
+            'Test Email from HR Agent',
+            """
+            <html>
+                <body>
+                    <h2>Test Email</h2>
+                    <p>This is a test email to verify SMTP configuration is working correctly.</p>
+                    <p>Sent via ZeptoMail integration.</p>
+                </body>
+            </html>
+            """
         )
         return Response({
             'status': 'success',

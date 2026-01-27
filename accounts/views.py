@@ -8,6 +8,7 @@ from django.conf import settings
 from django.utils import timezone
 from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
 from .models import EmailVerificationOTP, VerificationRequest
+from chat_project.utils import send_zeptomail
 
 User = get_user_model()
 
@@ -18,28 +19,21 @@ def send_otp_email(user, otp_code):
     """
     subject = 'Verify Your Account - OTP Code'
     message = f"""
-Hello {user.username},
-
-Thank you for registering! To complete your registration, please use the following One-Time Password (OTP):
-
-OTP Code: {otp_code}
-
-This code will expire in 30 minutes.
-
-If you didn't request this code, please ignore this email.
-
-Best regards,
-The Team
+    <html>
+        <body>
+            <p>Hello {user.username},</p>
+            <p>Thank you for registering! To complete your registration, please use the following One-Time Password (OTP):</p>
+            <h2 style="color: #4F46E5;">{otp_code}</h2>
+            <p>This code will expire in 30 minutes.</p>
+            <p>If you didn't request this code, please ignore this email.</p>
+            <br>
+            <p>Best regards,<br>The Team</p>
+        </body>
+    </html>
     """
     
     try:
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
+        send_zeptomail(user.email, subject, message)
         return True
     except Exception as e:
         import logging
@@ -233,12 +227,20 @@ def initiate_verification_request_view(request):
     
     # Send email
     subject = 'Verify Your User ID Request'
-    message = f'Your OTP code for verification request is: {otp_code}'
+    message = f"""
+    <html>
+        <body>
+            <p>Hello,</p>
+            <p>Your OTP code for verification request is:</p>
+            <h2 style="color: #4F46E5;">{otp_code}</h2>
+        </body>
+    </html>
+    """
     from_email = settings.DEFAULT_FROM_EMAIL
     recipient_list = [user.email]
     
     try:
-        send_mail(subject, message, from_email, recipient_list)
+        send_zeptomail(user.email, subject, message)
         return Response({'message': 'OTP sent to your email.'}, status=status.HTTP_200_OK)
     except Exception as e:
         return Response(
@@ -471,3 +473,45 @@ def verify_user_id_view(request):
         },
         status=status.HTTP_201_CREATED
     )
+
+from chat_project.utils import send_zeptomail
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def test_email_view(request):
+    """
+    Test email sending functionality.
+    """
+    email = request.data.get('email')
+    
+    if not email:
+        return Response(
+            {'error': 'Email address is required.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        
+    subject = 'Test Email from ZeptoMail'
+    message = 'This is a test email sent from the application to verify ZeptoMail integration.'
+    from_email = settings.DEFAULT_FROM_EMAIL
+    recipient_list = [email]
+    
+    try:
+        # send_mail(
+        #     subject=subject,
+        #     message=message,
+        #     from_email=from_email,
+        #     recipient_list=recipient_list,
+        #     fail_silently=False,
+        # )
+        send_zeptomail(email, subject, message)
+        return Response(
+            {'message': f'Test email sent successfully to {email}'},
+            status=status.HTTP_200_OK
+        )
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error sending test email: {str(e)}", exc_info=True)
+        return Response(
+            {'error': f'Failed to send email: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
