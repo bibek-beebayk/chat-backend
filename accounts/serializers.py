@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from django.contrib.auth import get_user_model, authenticate
+from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
@@ -72,25 +72,20 @@ class VerifyUserIDSerializer(serializers.Serializer):
         return value
 
 
-class LoginSerializer(serializers.Serializer):
-    """Serializer for user login."""
-    username = serializers.CharField()
-    password = serializers.CharField(write_only=True)
-    
-    def validate(self, data):
-        username = data.get('username')
-        password = data.get('password')
+
+
+
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Custom serializer to include user data in the token response.
+    """
+    def validate(self, attrs):
+        data = super().validate(attrs)
         
-        if username and password:
-            user = authenticate(username=username, password=password)
-            if not user:
-                raise serializers.ValidationError("Invalid username or password.")
-            if not user.is_active:
-                raise serializers.ValidationError("Please verify your email first. Check your inbox for the OTP code.")
-        else:
-            raise serializers.ValidationError("Must include username and password.")
-        
-        data['user'] = user
+        # Add extra responses here
+        data['user'] = UserSerializer(self.user).data
         return data
 
 

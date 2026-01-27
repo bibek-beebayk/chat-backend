@@ -13,3 +13,4 @@ boto3
 Pillow
 django-ckeditor
 django-zoho-zeptomail
+djangorestframework-simplejwt

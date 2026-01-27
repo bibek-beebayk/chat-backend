@@ -2,11 +2,10 @@ from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from django.contrib.auth import login, logout, get_user_model
-from django.core.mail import send_mail
+from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
-from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
+from .serializers import RegisterSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
 from .models import EmailVerificationOTP, VerificationRequest
 from chat_project.utils import send_zeptomail
 
@@ -86,53 +85,36 @@ def register_view(request):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-from django.views.decorators.csrf import ensure_csrf_cookie
-from django.utils.decorators import method_decorator
+from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
+from .serializers import CustomTokenObtainPairSerializer
 
-@api_view(['POST'])
-@permission_classes([AllowAny])
-@ensure_csrf_cookie
-def login_view(request):
+class CustomTokenObtainPairView(TokenObtainPairView):
     """
-    Login user and create session.
+    Login view that returns JWT tokens + user data.
     """
-    serializer = LoginSerializer(data=request.data)
-    if serializer.is_valid():
-        user = serializer.validated_data['user']
-        login(request, user)
-        
-        # Get new CSRF token after rotation
-        from django.middleware.csrf import get_token
-        token = get_token(request)
-        
-        return Response(
-            {
-                'message': 'Login successful',
-                'user': UserSerializer(user).data,
-                'csrfToken': token,
-                'sessionKey': request.session.session_key
-            },
-            status=status.HTTP_200_OK
-        )
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    serializer_class = CustomTokenObtainPairSerializer
 
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout_view(request):
     """
-    Logout user and destroy session.
+    Logout user by blacklisting the refresh token.
     """
-    logout(request)
-    return Response(
-        {'message': 'Logout successful'},
-        status=status.HTTP_200_OK
-    )
-
-
+    try:
+        refresh_token = request.data.get("refresh")
+        if not refresh_token:
+            return Response({"error": "Refresh token is required"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+        return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-@ensure_csrf_cookie
 def current_user_view(request):
     """
     Get current authenticated user.
@@ -143,13 +125,7 @@ def current_user_view(request):
     )
 
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-@ensure_csrf_cookie
-def get_csrf_token(request):
-    from django.middleware.csrf import get_token
-    token = get_token(request)
-    return Response({'success': 'CSRF cookie set', 'csrfToken': token})
+
 
 
 @api_view(['POST'])
@@ -171,11 +147,6 @@ def change_password_view(request):
             
         user.set_password(serializer.data.get('new_password'))
         user.save()
-        # Updating the password logs out all other sessions, but we want to keep this one?
-        # Standard Django behavior cycles session key. 'login' function does this.
-        # To prevent logout, we re-authenticate the session (Django < 3 requires manual update, > 3 handles it?)
-        # For simplicity in DRF/Session auth, let's re-login the user to update the session hash.
-        login(request, user)
         
         return Response(
             {'message': 'Password changed successfully'},
@@ -325,19 +296,16 @@ def verify_otp_view(request):
     otp_record.is_used = True
     otp_record.save()
     
-    # Log user in
-    login(request, user)
-    
-    # Get CSRF token
-    from django.middleware.csrf import get_token
-    token = get_token(request)
+    # Generate tokens
+    from rest_framework_simplejwt.tokens import RefreshToken
+    refresh = RefreshToken.for_user(user)
     
     return Response(
         {
             'message': 'Email verified successfully! You are now logged in.',
             'user': UserSerializer(user).data,
-            'csrfToken': token,
-            'sessionKey': request.session.session_key
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
         },
         status=status.HTTP_200_OK
     )

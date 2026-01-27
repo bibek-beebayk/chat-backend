@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'chat',
     'posts',
     'ckeditor',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 MIDDLEWARE = [
@@ -102,8 +103,8 @@ AUTH_USER_MODEL = 'accounts.User'
 # REST Framework configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
-        'rest_framework.authentication.BasicAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'rest_framework.authentication.SessionAuthentication', # Keep session for admin/browseable API if needed, or remove for pure API
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -113,4 +114,13 @@ REST_FRAMEWORK = {
         'chat_project.renderers.StandardResponseRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
+}
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
 }
