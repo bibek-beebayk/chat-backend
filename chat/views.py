@@ -605,3 +605,33 @@ def switch_station_view(request):
         'new_station': new_queue.name,
         'message': f"You have been moved to {new_queue.name}"
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def test_email_view(request):
+    """
+    Test endpoint to send an email.
+    """
+    from django.core.mail import send_mail
+    from django.conf import settings
+    
+    recipient = request.data.get('email', 'beebayk0001@gmail.com')
+    
+    try:
+        send_mail(
+            subject='Test Email from HR Agent',
+            message='This is a test email to verify SMTP configuration is working correctly.',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[recipient],
+            fail_silently=False,
+        )
+        return Response({
+            'status': 'success',
+            'message': f'Test email sent successfully to {recipient}'
+        })
+    except Exception as e:
+        return Response({
+            'status': 'error',
+            'message': f'Failed to send email: {str(e)}'
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

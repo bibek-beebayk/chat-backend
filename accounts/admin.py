@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import User
+from .models import User, EmailVerificationOTP
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
@@ -15,3 +15,12 @@ class UserAdmin(admin.ModelAdmin):
         else:
             obj.set_password(obj.password)
         super().save_model(request, obj, form, change)
+
+
+@admin.register(EmailVerificationOTP)
+class EmailVerificationOTPAdmin(admin.ModelAdmin):
+    list_display = ['user', 'otp_code', 'created_at', 'expires_at', 'is_used', 'attempts']
+    list_filter = ['is_used', 'created_at']
+    search_fields = ['user__username', 'user__email', 'otp_code']
+    readonly_fields = ['created_at', 'expires_at']
+    ordering = ['-created_at']

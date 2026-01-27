@@ -29,11 +29,24 @@ class RegisterSerializer(serializers.ModelSerializer):
         return data
     
     def create(self, validated_data):
-        pwd = validated_data.pop('confirm_password')
+        validated_data.pop('confirm_password')
         user = User.objects.create_user(**validated_data)
-        user.set_password(pwd)
+        # User must verify email before they can login
+        user.is_active = False
         user.save()
         return user
+
+
+class VerifyOTPSerializer(serializers.Serializer):
+    """Serializer for OTP verification."""
+    email = serializers.EmailField(required=True)
+    otp_code = serializers.CharField(required=True, min_length=6, max_length=6)
+    
+    def validate_otp_code(self, value):
+        """Ensure OTP code is exactly 6 digits"""
+        if not value.isdigit():
+            raise serializers.ValidationError("OTP code must contain only digits.")
+        return value
 
 
 class LoginSerializer(serializers.Serializer):
@@ -50,10 +63,9 @@ class LoginSerializer(serializers.Serializer):
             if not user:
                 raise serializers.ValidationError("Invalid username or password.")
             if not user.is_active:
-                raise serializers.ValidationError("User account is disabled.")
+                raise serializers.ValidationError("Please verify your email first. Check your inbox for the OTP code.")
         else:
             raise serializers.ValidationError("Must include username and password.")
-        
         
         data['user'] = user
         return data
