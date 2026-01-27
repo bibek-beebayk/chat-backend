@@ -7,10 +7,20 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model."""
     
+    verification_status = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ['id', 'username', 'user_type', 'is_verified', 'email', 'first_name', 'last_name']
+        fields = ['id', 'username', 'user_type', 'is_verified', 'email', 'first_name', 'last_name', 'verification_status']
         read_only_fields = ['id']
+
+    def get_verification_status(self, obj):
+        from .models import VerificationRequest
+        try:
+            latest_request = VerificationRequest.objects.filter(user=obj).latest('created_at')
+            return latest_request.status
+        except VerificationRequest.DoesNotExist:
+            return None
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -46,6 +56,19 @@ class VerifyOTPSerializer(serializers.Serializer):
         """Ensure OTP code is exactly 6 digits"""
         if not value.isdigit():
             raise serializers.ValidationError("OTP code must contain only digits.")
+        return value
+
+
+class VerifyUserIDSerializer(serializers.Serializer):
+    """Serializer for external user ID verification."""
+    user_id = serializers.CharField(required=True, max_length=100)
+    otp = serializers.CharField(required=True, min_length=6, max_length=6)
+    
+    def validate_user_id(self, value):
+        """Ensure user_id is not empty and trimmed"""
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("User ID cannot be empty.")
         return value
 
 

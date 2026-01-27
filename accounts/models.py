@@ -27,6 +27,13 @@ class User(AbstractUser):
         default=False,
         help_text='Designates whether this user has verified their account.'
     )
+    external_user_id = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        unique=True,
+        help_text="External user ID from another service for verification"
+    )
     
     def __str__(self):
         return f"{self.username} ({self.get_user_type_display()})"
@@ -81,3 +88,113 @@ class EmailVerificationOTP(models.Model):
     def generate_otp():
         """Generate a random 6-digit OTP code"""
         return ''.join(random.choices(string.digits, k=6))
+
+
+class VerificationRequest(models.Model):
+    """
+    Model to store user verification requests.
+    Staff manually approve these after checking external sources.
+    """
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='verification_requests',
+        help_text="User requesting verification"
+    )
+    external_user_id = models.CharField(
+        max_length=100,
+        help_text="External user ID provided by user"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending',
+        help_text="Request status"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the request was reviewed"
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_verification_requests',
+        help_text="Staff member who reviewed this request"
+    )
+    notes = models.TextField(
+        blank=True,
+        help_text="Staff notes about verification"
+    )
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Verification Request'
+        verbose_name_plural = 'Verification Requests'
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.external_user_id} ({self.status})"
+    
+    def approve(self, reviewed_by_user):
+        """Approve the verification request and verify the user"""
+        from django.core.mail import send_mail
+        from django.conf import settings
+
+        self.user.is_verified = True
+        self.user.external_user_id = self.external_user_id
+        self.user.save()
+        
+        self.status = 'approved'
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewed_by_user
+        self.save()
+        
+        # Send approval email
+        try:
+            send_mail(
+                subject='Account Verification Approved',
+                message=f'Hello {self.user.username},\n\nYour account verification request has been approved. You are now a verified user.\n\nThank you for playing with us!',
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[self.user.email],
+                fail_silently=True
+            )
+        except Exception:
+            pass  # Don't fail the transaction if email fails
+    
+    def reject(self, reviewed_by_user, notes=''):
+        """Reject the verification request"""
+        from django.core.mail import send_mail
+        from django.conf import settings
+
+        self.status = 'rejected'
+        self.reviewed_at = timezone.now()
+        self.reviewed_by = reviewed_by_user
+        if notes:
+            self.notes = notes
+        self.save()
+        
+        # Send rejection email
+        try:
+            message = f'Hello {self.user.username},\n\nYour account verification request has been rejected.'
+            if self.notes:
+                message += f'\n\nReason: {self.notes}'
+            message += '\n\nPlease contact support if you have any questions.'
+
+            send_mail(
+                subject='Account Verification Update',
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[self.user.email],
+                fail_silently=True
+            )
+        except Exception:
+            pass  # Don't fail the transaction if email fails

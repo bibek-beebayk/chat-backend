@@ -6,8 +6,8 @@ from django.contrib.auth import login, logout, get_user_model
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
-from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, VerifyOTPSerializer
-from .models import EmailVerificationOTP
+from .serializers import RegisterSerializer, LoginSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
+from .models import EmailVerificationOTP, VerificationRequest
 
 User = get_user_model()
 
@@ -190,6 +190,62 @@ def change_password_view(request):
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def initiate_verification_request_view(request):
+    """
+    Generate and send an OTP for user ID verification.
+    """
+    user = request.user
+    
+    # Check if user is already verified
+    if user.is_verified:
+        return Response(
+            {'error': 'Your account is already verified.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Check if user already has a pending verification request
+    pending_request = VerificationRequest.objects.filter(
+        user=user,
+        status='pending'
+    ).first()
+    
+    if pending_request:
+        return Response(
+            {'error': 'You already have a pending verification request.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Clean up old unused OTPs
+    EmailVerificationOTP.objects.filter(
+        user=user,
+        is_used=False
+    ).delete()
+    
+    # Generate new OTP
+    otp_code = EmailVerificationOTP.generate_otp()
+    EmailVerificationOTP.objects.create(
+        user=user,
+        otp_code=otp_code
+    )
+    
+    # Send email
+    subject = 'Verify Your User ID Request'
+    message = f'Your OTP code for verification request is: {otp_code}'
+    from_email = settings.DEFAULT_FROM_EMAIL
+    recipient_list = [user.email]
+    
+    try:
+        send_mail(subject, message, from_email, recipient_list)
+        return Response({'message': 'OTP sent to your email.'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response(
+            {'error': 'Failed to send email. Please try again.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
 @permission_classes([AllowAny])
 def verify_otp_view(request):
     """
@@ -257,9 +313,8 @@ def verify_otp_view(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # OTP is valid - activate user
+    # OTP is valid - activate user (but keep unverified until user ID verification)
     user.is_active = True
-    user.is_verified = True
     user.save()
     
     # Mark OTP as used
@@ -338,4 +393,79 @@ def resend_otp_view(request):
     return Response(
         {'message': 'A new OTP code has been sent to your email.'},
         status=status.HTTP_200_OK
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_user_id_view(request):
+    """
+    Submit a verification request with external user ID.
+    Requires OTP verification.
+    """
+    serializer = VerifyUserIDSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    user = request.user
+    user_id = serializer.validated_data['user_id']
+    otp_code = serializer.validated_data['otp']
+    
+    # Check if user is already verified
+    if user.is_verified:
+        return Response(
+            {'error': 'Your account is already verified.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Check if user already has a pending verification request
+    pending_request = VerificationRequest.objects.filter(
+        user=user,
+        status='pending'
+    ).first()
+    
+    if pending_request:
+        return Response(
+            {'error': 'You already have a pending verification request. Please wait for staff approval.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+        
+    # Verify OTP
+    try:
+        otp_record = EmailVerificationOTP.objects.filter(
+            user=user,
+            otp_code=otp_code,
+            is_used=False
+        ).latest('created_at')
+        
+        if not otp_record.is_valid():
+            return Response(
+                {'error': 'OTP has expired. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Mark OTP as used
+        otp_record.is_used = True
+        otp_record.save()
+        
+    except EmailVerificationOTP.DoesNotExist:
+        return Response(
+            {'error': 'Invalid OTP.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Create verification request
+    verification_request = VerificationRequest.objects.create(
+        user=user,
+        external_user_id=user_id,
+        status='pending'
+    )
+    
+    return Response(
+        {
+            'message': 'Verification request submitted successfully. Please wait for staff approval.',
+            'status': 'pending',
+            'request_id': verification_request.id
+        },
+        status=status.HTTP_201_CREATED
     )
