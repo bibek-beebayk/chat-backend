@@ -114,10 +114,10 @@ sentry_sdk.init(
 )
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'smtp.zoho.com.au'
+EMAIL_HOST = 'smtp.zoho.com.au' 
 EMAIL_PORT = 587 
 EMAIL_USE_TLS = True 
 EMAIL_USE_SSL = False
 EMAIL_HOST_USER = 'support@hi-rollin.online'
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD")
+EMAIL_HOST_PASSWORD = "mf8D5fVaZiCT"
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
