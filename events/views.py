@@ -8,7 +8,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 
-from .models import Event
+from .models import Event, EventRegistration
 from .serializers import EventSerializer, RegisterInitSerializer, VerifyEventOTPSerializer
 from accounts.models import EmailVerificationOTP
 from accounts.views import send_otp_email
@@ -26,7 +26,15 @@ def get_latest_event(request):
     event = Event.objects.filter(is_active=True).order_by('-start_date').first()
     if event:
         serializer = EventSerializer(event)
-        return Response(serializer.data)
+        data = serializer.data
+        
+        # Check registration status if user is authenticated
+        if request.user.is_authenticated:
+            data['is_registered'] = EventRegistration.objects.filter(user=request.user, event=event).exists()
+        else:
+            data['is_registered'] = False
+            
+        return Response(data)
     return Response({'message': 'No active events'}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['POST'])
@@ -36,12 +44,18 @@ def register_init_view(request):
     if serializer.is_valid():
         email = serializer.validated_data['email']
         username = serializer.validated_data['username']
+        event_id = serializer.validated_data.get('event_id')
         
         # Check if user exists by email or username
         user = User.objects.filter(email=email).first()
         if not user:
             user = User.objects.filter(username=username).first()
             
+        # Check for existing registration
+        if user and event_id:
+            if EventRegistration.objects.filter(user=user, event_id=event_id).exists():
+                return Response({'error': 'You are already registered for this event.'}, status=status.HTTP_400_BAD_REQUEST)
+
         if not user:
             # Create new inactive user
             user = User.objects.create_user(
@@ -94,6 +108,8 @@ def verify_event_otp_view(request):
         except EmailVerificationOTP.DoesNotExist:
              return Response({'error': 'Invalid OTP'}, status=status.HTTP_400_BAD_REQUEST)
              
+
+
         # Determine Flow Phase 2
         # If user has a usable password and is active -> Existing User -> Send Event Link
         # If user has no usable password or is inactive -> New User -> Send Set Password Link
@@ -103,14 +119,15 @@ def verify_event_otp_view(request):
             event_link += f"/{event_id}"
             
         if user.has_usable_password() and user.is_active:
-            # Send Event Link Email
-            subject = "Access Your Event"
+            # Send Event Link Email (Login Link)
+            subject = "Access Your Event Dashboard"
             message = f"""
             <html>
                 <body>
                     <p>Hello {user.username},</p>
                     <p>You have successfully verified your identity.</p>
-                    <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event</a></p>
+                    <p>Please log in to complete your registration for the event.</p>
+                    <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
                 </body>
             </html>
             """
@@ -131,7 +148,7 @@ def verify_event_otp_view(request):
             <html>
                 <body>
                     <p>Hello {user.username},</p>
-                    <p>Welcome! Please set your password to complete your account setup and access the event.</p>
+                    <p>Welcome! Please set your password to complete your account setup and proceed to the event page.</p>
                     <p><a href="{set_password_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Set Password</a></p>
                 </body>
             </html>
@@ -144,6 +161,60 @@ def verify_event_otp_view(request):
         })
             
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+from rest_framework.permissions import IsAuthenticated
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def register_for_event_view(request):
+    """
+    Manually register an authenticated user for an event.
+    Requires user to be verified.
+    """
+    event_id = request.data.get('event_id')
+    if not event_id:
+        return Response({'error': 'Event ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    user = request.user
+    
+    # 1. Check Verification
+    if not user.is_verified:
+        return Response({
+            'error': 'User could not be verified. Please go through the verification requirements and try again.'
+        }, status=status.HTTP_400_BAD_REQUEST)
+        
+    # 2. Check duplicate registration
+    if EventRegistration.objects.filter(user=user, event_id=event_id).exists():
+         return Response({'error': 'You are already registered for this event.'}, status=status.HTTP_400_BAD_REQUEST)
+         
+    # 3. Create Registration
+    EventRegistration.objects.create(
+        user=user,
+        event_id=event_id,
+        game_username=user.username
+    )
+    
+    return Response({
+        'status': 'success',
+        'message': 'You are successfully registered!'
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def check_eligibility_view(request):
+    """
+    Check if the user is eligible for the event.
+    Currently hardcoded to True.
+    """
+    event_id = request.data.get('event_id')
+    if not event_id:
+        return Response({'error': 'Event ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Future logic will go here
+    return Response({'eligible': True})
+
 
 from .serializers import SetPasswordSerializer
 from django.utils.http import urlsafe_base64_decode

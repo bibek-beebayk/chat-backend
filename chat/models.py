@@ -10,6 +10,7 @@ class SupportRoom(models.Model):
     ROOM_TYPES = (
         ('player', 'Player Support'),
         ('agent', 'Agent Support'),
+        ('event', 'Event Support'),
         ('all', 'General Support'),
     )
     name = models.CharField(max_length=100)

@@ -427,10 +427,12 @@ def verify_user_id_view(request):
         )
     
     # Create verification request
+    event_id = request.data.get('event_id')
     verification_request = VerificationRequest.objects.create(
         user=user,
         external_user_id=user_id,
-        status='pending'
+        status='pending',
+        event_id=event_id 
     )
     
     return Response(
