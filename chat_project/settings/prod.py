@@ -62,7 +62,7 @@ CSRF_COOKIE_SAMESITE = 'None'
 # CORS/CSRF (Restrictive)
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "https://chat-frontend-nu-five.vercel.app,https://chat-backend-production-c7cd.up.railway.app", ).split(",")
+CORS_ALLOWED_ORIGINS = os.environ.get("CORS_ALLOWED_ORIGINS", "https://chat-frontend-nu-five.vercel.app,https://chat-backend-production-c7cd.up.railway.app").split(",")
 CSRF_TRUSTED_ORIGINS = os.environ.get("CSRF_TRUSTED_ORIGINS", "https://chat-frontend-nu-five.vercel.app,https://chat-backend-production-c7cd.up.railway.app").split(",")
 
 # Static Files (Whitenoise)
@@ -129,3 +129,5 @@ ZEPTO_ORG_MAIL_TOKEN = ZEPTOMAIL_API_KEY
 ZEPTOMAIL_FROM = "noreply@hrlzone.com"
 DEFAULT_FROM_EMAIL = ZEPTOMAIL_FROM
 SERVER_EMAIL = ZEPTOMAIL_FROM
+
+MAIN_WEBSITE_URL = "https://community.hrlzone.com"

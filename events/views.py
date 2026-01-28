@@ -13,11 +13,12 @@ from .serializers import EventSerializer, RegisterInitSerializer, VerifyEventOTP
 from accounts.models import EmailVerificationOTP
 from accounts.views import send_otp_email
 from chat_project.utils import send_zeptomail
+from django.conf import settings
 
 User = get_user_model()
 
 # Placeholder URLs - In production these should come from settings or env
-MAIN_WEBSITE_URL = "https://chatfe.worldstories.net" 
+MAIN_WEBSITE_URL = settings.MAIN_WEBSITE_URL
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
