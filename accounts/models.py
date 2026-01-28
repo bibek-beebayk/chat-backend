@@ -117,6 +117,14 @@ class VerificationRequest(models.Model):
         default='pending',
         help_text="Request status"
     )
+    event = models.ForeignKey(
+        'events.Event',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='verification_requests',
+        help_text="Event related to this verification request"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     reviewed_at = models.DateTimeField(
         null=True,
@@ -156,7 +164,17 @@ class VerificationRequest(models.Model):
         self.status = 'approved'
         self.reviewed_at = timezone.now()
         self.reviewed_by = reviewed_by_user
+        self.reviewed_by = reviewed_by_user
         self.save()
+        
+        # If linked to an event, register the user
+        if self.event:
+            from events.models import EventRegistration
+            EventRegistration.objects.get_or_create(
+                user=self.user,
+                event=self.event,
+                defaults={'game_username': self.external_user_id}
+            )
         
         # Send approval email
         try:

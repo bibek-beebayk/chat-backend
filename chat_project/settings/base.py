@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'posts',
     'ckeditor',
     'rest_framework_simplejwt.token_blacklist',
+    'events',
 ]
 
 MIDDLEWARE = [
