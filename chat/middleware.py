@@ -1,22 +1,23 @@
 from django.contrib.auth.models import AnonymousUser
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
-from django.contrib.sessions.models import Session
 from django.contrib.auth import get_user_model
 from urllib.parse import parse_qs
+from rest_framework_simplejwt.tokens import UntypedToken
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from jwt import decode as jwt_decode
+from django.conf import settings
 
 @database_sync_to_async
-def get_user_from_session_key(session_key):
+def get_user_from_jwt(token_key):
     try:
-        from importlib import import_module
-        from django.conf import settings
-        engine = import_module(settings.SESSION_ENGINE)
-        session_store = engine.SessionStore(session_key)
+        UntypedToken(token_key)
+    except (InvalidToken, TokenError):
+        return AnonymousUser()
         
-        user_id = session_store.get('_auth_user_id')
-        if not user_id:
-            return AnonymousUser()
-            
+    try:
+        decoded_data = jwt_decode(token_key, settings.SECRET_KEY, algorithms=["HS256"])
+        user_id = decoded_data.get('user_id')
         User = get_user_model()
         return User.objects.get(id=user_id)
     except Exception:
@@ -25,7 +26,7 @@ def get_user_from_session_key(session_key):
 class QueryAuthMiddleware(BaseMiddleware):
     """
     Custom middleware to authenticate users via query parameter 'token' in WebSocket URL.
-    This bypasses cookie restrictions (ITP) on iOS/Brave by passing the session key explicitly.
+    Expected URL: ws://...?token=<access_token>
     """
     async def __call__(self, scope, receive, send):
         # Only handle websocket connections
@@ -37,10 +38,10 @@ class QueryAuthMiddleware(BaseMiddleware):
         query_params = parse_qs(query_string)
         token = query_params.get('token', [None])[0]
 
-        # Use token if provided, otherwise fall back to cookies (AuthMiddlewareStack)
+        # Use token if provided
         if token:
-            user = await get_user_from_session_key(token)
-            if user and user.is_authenticated:
+            user = await get_user_from_jwt(token)
+            if user:
                 scope['user'] = user
                 
         return await super().__call__(scope, receive, send)
