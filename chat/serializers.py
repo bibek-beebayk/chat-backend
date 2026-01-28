@@ -46,11 +46,12 @@ class RoomSerializer(serializers.ModelSerializer):
     
     queue = serializers.PrimaryKeyRelatedField(read_only=True)
     queue_name = serializers.CharField(source='queue.name', read_only=True)
+    queue_type = serializers.CharField(source='queue.room_type', read_only=True)
     can_switch_station = serializers.SerializerMethodField()
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue', 'queue_name', 'can_switch_station']
+        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue', 'queue_name', 'queue_type', 'can_switch_station']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):

@@ -106,19 +106,40 @@ def room_list_view(request):
         # Load Balancing / Routing Logic
         # Check if queue needs assignment OR Re-assignment (Dynamic Re-routing)
         needs_routing = False
+        
+        # Check if a specific room type is requested (e.g. 'event')
+        requested_type = request.query_params.get('room_type')
+        
         if not room.queue:
             needs_routing = True
         elif not room.queue.is_active:
              # Queue is inactive (staff left), re-route to an active one!
              needs_routing = True
+        elif requested_type and room.queue.room_type != requested_type:
+             # Context switch requested (e.g. from Player Support to Event Support)
+             needs_routing = True
              
         if needs_routing:
             # Find candidate rooms
             candidates = SupportRoom.objects.filter(is_active=True)
-            if user.user_type == 'player':
-                candidates = candidates.filter(room_type__in=['player', 'all'])
-            elif user.user_type == 'agent':
-                candidates = candidates.filter(room_type__in=['agent', 'all'])
+            
+            # Filter by requested type first if specified
+            if requested_type:
+                candidates = candidates.filter(room_type=requested_type)
+                # If no active candidates of requested type, fallback?
+                # For now let's try to find them. If none, maybe fallback to default logic.
+                if not candidates.exists():
+                     # Fallback to standard logic if requested type unavailable
+                     candidates = SupportRoom.objects.filter(is_active=True)
+                     if user.user_type == 'player':
+                        candidates = candidates.filter(room_type__in=['player', 'all'])
+                     elif user.user_type == 'agent':
+                        candidates = candidates.filter(room_type__in=['agent', 'all'])
+            else:
+                if user.user_type == 'player':
+                    candidates = candidates.filter(room_type__in=['player', 'all'])
+                elif user.user_type == 'agent':
+                    candidates = candidates.filter(room_type__in=['agent', 'all'])
             
             # Annotate with load (OPEN queued chats)
             candidates = candidates.annotate(
@@ -126,16 +147,27 @@ def room_list_view(request):
             ).order_by('load')
             
             if candidates.exists():
-                room.queue = candidates.first()
-                room.save()
+                new_queue = candidates.first()
+                if room.queue != new_queue:
+                    # If we are switching queues, maybe clear current handler?
+                    if room.queue and room.queue.room_type != new_queue.room_type:
+                        room.current_handler = None
+                        
+                    room.queue = new_queue
+                    room.save()
+                    
+                    # Optional: Add system message about switch context
+                    if requested_type and not created:
+                         Message.objects.create(
+                            room=room,
+                            sender=user, # System-like
+                            content=f"System: Connected to {new_queue.name}",
+                            is_read=True
+                        )
 
         # If it was CLOSED, reopen it?
         if room.status == 'CLOSED':
             room.status = 'OPEN'
-            # Re-route if queue became inactive? 
-            # Ideally yes, but simpler to keep sticky for now unless explicitly requested.
-            # If queue is inactive, maybe re-route?
-            # Let's keep it sticky for "Permanent assignment" per user request.
             room.save()
             
         # Manually annotate unread count for serializer compatibility
