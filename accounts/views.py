@@ -485,3 +485,145 @@ def test_email_view(request):
             {'error': f'Failed to send email: {str(e)}'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# Forgot Password Views
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def initiate_password_reset_view(request):
+    """
+    Step 1: Initiate password reset by sending OTP to email.
+    """
+    from .serializers import ForgotPasswordInitiateSerializer
+    
+    serializer = ForgotPasswordInitiateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    email = serializer.validated_data['email']
+    
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        # Security: Don't reveal if user exists or not, or simply return 404 if less security concern
+        # For better UX in this context, we'll return 404 to let user know to register
+        return Response(
+            {'error': 'No account found with this email address.'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+        
+    # Generate and send OTP
+    # Clean up old unused OTPs
+    EmailVerificationOTP.objects.filter(user=user, is_used=False).delete()
+    
+    otp_code = EmailVerificationOTP.generate_otp()
+    EmailVerificationOTP.objects.create(user=user, otp_code=otp_code)
+    
+    # Send Email
+    subject = 'Reset Your Password - OTP Code'
+    message = f"""
+    <html>
+        <body>
+            <p>Hello {user.username},</p>
+            <p>You requested to reset your password. Use the code below to proceed:</p>
+            <h2 style="color: #ea580c;">{otp_code}</h2>
+            <p>This code expires in 30 minutes.</p>
+        </body>
+    </html>
+    """
+    
+    try:
+        send_zeptomail(user.email, subject, message)
+        return Response({'message': 'OTP code sent to your email.'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': 'Failed to send OTP email.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_reset_otp_view(request):
+    """
+    Step 2: Verify OTP and return a signed reset token.
+    """
+    from .serializers import VerifyResetOTPSerializer
+    from django.core.signing import TimestampSigner
+    
+    serializer = VerifyResetOTPSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    email = serializer.validated_data['email']
+    otp_code = serializer.validated_data['otp_code']
+    
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+    try:
+        otp_record = EmailVerificationOTP.objects.filter(
+            user=user, otp_code=otp_code, is_used=False
+        ).latest('created_at')
+    except EmailVerificationOTP.DoesNotExist:
+        return Response({'error': 'Invalid OTP.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    if not otp_record.is_valid():
+        return Response({'error': 'OTP expired or invalid.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    if otp_record.otp_code != otp_code:
+        otp_record.increment_attempts()
+        return Response({'error': 'Invalid OTP.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    # OTP Valid: Mark as used
+    otp_record.is_used = True
+    otp_record.save()
+    
+    # Generate Signed Token (valid for 10 minutes)
+    signer = TimestampSigner()
+    # Sign the user ID
+    reset_token = signer.sign(str(user.id))
+    
+    return Response({
+        'message': 'OTP Verified.',
+        'reset_token': reset_token
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password_complete_view(request):
+    """
+    Step 3: Reset password using the token.
+    """
+    from .serializers import ResetPasswordCompleteSerializer
+    from django.core.signing import TimestampSigner, SignatureExpired, BadSignature
+    
+    serializer = ResetPasswordCompleteSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+    reset_token = serializer.validated_data['reset_token']
+    new_password = serializer.validated_data['new_password']
+    
+    signer = TimestampSigner()
+    try:
+        # Verify token (max age 10 mins = 600 seconds)
+        user_id = signer.unsign(reset_token, max_age=600)
+    except SignatureExpired:
+        return Response({'error': 'Reset session expired. Please start over.'}, status=status.HTTP_400_BAD_REQUEST)
+    except BadSignature:
+        return Response({'error': 'Invalid reset token.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+        
+    # Set new password
+    user.set_password(new_password)
+    user.save()
+    
+    # Auto-login? Or just success message?
+    # Let's just return success and let them login
+    return Response({'message': 'Password has been reset successfully. Please login with your new password.'}, status=status.HTTP_200_OK)

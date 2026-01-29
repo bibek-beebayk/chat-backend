@@ -15,4 +15,7 @@ urlpatterns = [
     path('initiate-verification-request/', views.initiate_verification_request_view, name='initiate-verification-request'),
     path('verify-user-id/', views.verify_user_id_view, name='verify-user-id'),
     path('test-email/', views.test_email_view, name='test-email'),
+    path('forgot-password/initiate/', views.initiate_password_reset_view, name='forgot-password-initiate'),
+    path('forgot-password/verify-otp/', views.verify_reset_otp_view, name='forgot-password-verify-otp'),
+    path('forgot-password/complete/', views.reset_password_complete_view, name='forgot-password-complete'),
 ]
