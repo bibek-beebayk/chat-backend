@@ -54,12 +54,25 @@ def register_init_view(request):
         # Check for existing registration
         if user and event_id:
             if EventRegistration.objects.filter(user=user, event_id=event_id).exists():
-                # Return success with specific status to trigger frontend redirect
+                # Send Event Link Email
                 event_link = f"{MAIN_WEBSITE_URL}/events/{event_id}"
+                
+                subject = "Access Your Event"
+                message = f"""
+                <html>
+                    <body>
+                        <p>Hello {user.username},</p>
+                        <p>You are already registered for this event.</p>
+                        <p>Click the link below to access the event page:</p>
+                        <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
+                    </body>
+                </html>
+                """
+                send_zeptomail(user.email, subject, message)
+
                 return Response({
                     'status': 'already_registered',
-                    'redirect_url': event_link,
-                    'message': 'You are already registered for this event.'
+                    'message': 'You are already registered. We have sent the event link to your email.'
                 }, status=status.HTTP_200_OK)
 
         if not user:
