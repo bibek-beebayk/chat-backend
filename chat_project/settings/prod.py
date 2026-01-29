@@ -6,7 +6,10 @@ SECRET_KEY = 'ih(u#bi@vd-0jog$myq824vrh9j5+*!2_w12)$u1x-29khfx%6'
 DEBUG = False
 
 # Require ALLOWED_HOSTS for production
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "chat-backend-production-c7cd.up.railway.app").split(",")
+ALLOWED_HOSTS = [
+    "chat-backend-production-c7cd.up.railway.app",
+    "hradmin.hrlzone.com"
+]
 
 
 # Production Database (Expects Env Vars)
@@ -62,8 +65,8 @@ CSRF_COOKIE_SAMESITE = 'None'
 # CORS/CSRF (Restrictive)
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com"]
-CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com"]
+CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com"]
+CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com"]
 
 # Static Files (Whitenoise)
 # Static Files (Whitenoise) & Media Files (Cloudflare R2)
