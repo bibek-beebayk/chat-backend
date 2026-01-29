@@ -141,7 +141,7 @@ class VerificationRequest(models.Model):
     )
     notes = models.TextField(
         blank=True,
-        help_text="Staff notes about verification"
+        help_text="Staff notes about verification",
     )
     
     class Meta:
@@ -221,8 +221,9 @@ class VerificationRequest(models.Model):
                     <body>
                         <p>Hello {self.user.username},</p>
                         <p>Your account verification request has been rejected.</p>
-                        <p>Reason: {self.notes if self.notes else 'No reason provided.'}</p>
+                        <p>Reason: {self.notes if self.notes else 'We could not find the game id you provided in our system.'}</p>
                         <p>Please contact support if you have any questions.</p>
+                        <a href="https://community.hrlzone.com">Rollin Community</a>
                     </body>
                 </html>
                 """
