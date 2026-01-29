@@ -54,7 +54,13 @@ def register_init_view(request):
         # Check for existing registration
         if user and event_id:
             if EventRegistration.objects.filter(user=user, event_id=event_id).exists():
-                return Response({'error': 'You are already registered for this event.'}, status=status.HTTP_400_BAD_REQUEST)
+                # Return success with specific status to trigger frontend redirect
+                event_link = f"{MAIN_WEBSITE_URL}/events/{event_id}"
+                return Response({
+                    'status': 'already_registered',
+                    'redirect_url': event_link,
+                    'message': 'You are already registered for this event.'
+                }, status=status.HTTP_200_OK)
 
         if not user:
             # Create new inactive user
@@ -157,7 +163,9 @@ def verify_event_otp_view(request):
             
         return Response({
             'status': 'success',
-            'message': 'Verification successful. Please check your email for the next steps.'
+            'message': 'Verification successful. Please check your email for the next steps.',
+            'is_existing_user': user.has_usable_password() and user.is_active,
+            'redirect_url': event_link if (user.has_usable_password() and user.is_active) else None
         })
             
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
