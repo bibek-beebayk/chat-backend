@@ -8,9 +8,27 @@ from chat_project.utils import send_zeptomail
 
 @admin.register(EligibilityCheckRequest)
 class EligibilityCheckRequestAdmin(admin.ModelAdmin):
-    list_display = ('user', 'event', 'status', 'created_at', 'actions_column')
+    list_display = ('user', 'event', 'status_colored', 'created_at', 'actions_column')
     list_filter = ('status', 'event')
     actions = ['approve_requests', 'reject_requests']
+
+    def status_colored(self, obj):
+        from django.utils.html import format_html
+        
+        colors = {
+            'pending': '#d97706', # Amber-600 (Darker for readability)
+            'approved': '#16a34a', # Green-600
+            'rejected': '#dc2626', # Red-600
+        }
+        color = colors.get(obj.status, 'black')
+        
+        return format_html(
+            '<span style="color: {}; font-weight: bold;">{}</span>',
+            color,
+            obj.get_status_display()
+        )
+    status_colored.short_description = 'Status'
+    status_colored.admin_order_field = 'status'
 
     def actions_column(self, obj):
         from django.utils.html import format_html
