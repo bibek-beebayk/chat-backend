@@ -25,3 +25,23 @@ class EventRegistration(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.event.title}"
+
+
+class EligibilityCheckRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+    
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='eligibility_requests')
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='eligibility_requests')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        unique_together = ('user', 'event')
+        
+    def __str__(self):
+        return f"{self.user.username} - {self.event.title} ({self.status})"

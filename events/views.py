@@ -26,13 +26,25 @@ def get_latest_event(request):
     event = Event.objects.filter(is_active=True).order_by('-start_date').first()
     if event:
         serializer = EventSerializer(event)
-        data = serializer.data
+        data = serializer.data.copy() # Make mutable
         
         # Check registration status if user is authenticated
         if request.user.is_authenticated:
+            print(f"DEBUG: User {request.user.username} is authenticated")
             data['is_registered'] = EventRegistration.objects.filter(user=request.user, event=event).exists()
+            
+            from .models import EligibilityCheckRequest
+            try:
+                latest_request = EligibilityCheckRequest.objects.filter(user=request.user, event=event).latest('created_at')
+                data['eligibility_status'] = latest_request.status
+                print(f"DEBUG: Found eligibility request: {latest_request.status}")
+            except EligibilityCheckRequest.DoesNotExist:
+                data['eligibility_status'] = None
+                print("DEBUG: No eligibility request found")
         else:
+            print("DEBUG: User is NOT authenticated")
             data['is_registered'] = False
+            data['eligibility_status'] = None
             
         return Response(data)
     return Response({'message': 'No active events'}, status=status.HTTP_404_NOT_FOUND)
@@ -226,15 +238,36 @@ def register_for_event_view(request):
 @permission_classes([IsAuthenticated])
 def check_eligibility_view(request):
     """
-    Check if the user is eligible for the event.
-    Currently hardcoded to True.
+    Create an eligibility check request.
     """
+    print(f"DEBUG check_eligibility: {request.data}")
     event_id = request.data.get('event_id')
+    print(f"DEBUG event_id: {event_id}")
     if not event_id:
         return Response({'error': 'Event ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # Future logic will go here
-    return Response({'eligible': True})
+    event = get_object_or_404(Event, id=event_id)
+    from .models import EligibilityCheckRequest
+    
+    # Check if request already exists
+    eligibility_request, created = EligibilityCheckRequest.objects.get_or_create(
+        user=request.user,
+        event=event
+    )
+    
+    if eligibility_request.status == 'approved':
+         # If already approved, return eligible
+         return Response({'eligible': True})
+         
+    if eligibility_request.status == 'rejected':
+         # Reset to pending for retry
+         eligibility_request.status = 'pending'
+         eligibility_request.save()
+
+    return Response({
+        'message': 'Your eligibility is being checked. Please check back in a while.',
+        'status': 'pending'
+    })
 
 
 from .serializers import SetPasswordSerializer
