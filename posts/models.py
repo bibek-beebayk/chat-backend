@@ -15,6 +15,7 @@ class Post(models.Model):
     content = RichTextField(blank=True)
     image = models.ImageField(upload_to='post_images/', blank=True, null=True)
     video = models.FileField(upload_to='post_videos/', blank=True, null=True)
+    link = models.URLField(blank=True, null=True, help_text="Optional link to external content")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
@@ -24,3 +25,8 @@ class Post(models.Model):
 
     def __str__(self):
         return self.title
+
+    # def save(self, *args, **kwargs):
+    #     if self.link and not self.link.startswith('http://') and not self.link.startswith('https://'):
+    #         self.link = 'http://' + self.link
+    #     super().save(*args, **kwargs)
