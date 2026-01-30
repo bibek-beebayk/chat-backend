@@ -8,6 +8,7 @@ class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = ['id', 'title', 'description', 'start_date', 'end_date', 'poster', 'is_active']
+        read_only_fields = ['is_active']
 
 class RegisterInitSerializer(serializers.Serializer):
     username = serializers.CharField(required=True)

@@ -20,10 +20,13 @@ User = get_user_model()
 # Placeholder URLs - In production these should come from settings or env
 MAIN_WEBSITE_URL = settings.MAIN_WEBSITE_URL
 
+from django.utils import timezone
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_latest_event(request):
-    event = Event.objects.filter(is_active=True).order_by('-start_date').first()
+    now = timezone.now()
+    event = Event.objects.filter(start_date__lte=now, end_date__gte=now).order_by('-start_date').first()
     if event:
         serializer = EventSerializer(event)
         data = serializer.data.copy() # Make mutable
@@ -48,6 +51,14 @@ def get_latest_event(request):
             
         return Response(data)
     return Response({'message': 'No active events'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_active_events(request):
+    now = timezone.now()
+    events = Event.objects.filter(start_date__lte=now, end_date__gte=now).order_by('start_date')
+    serializer = EventSerializer(events, many=True, context={'request': request})
+    return Response(serializer.data)
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
