@@ -74,41 +74,39 @@ def register_init_view(request):
         if not user:
             user = User.objects.filter(username=username).first()
             
-        # Check for existing registration
-        if user and event_id:
-            if EventRegistration.objects.filter(user=user, event_id=event_id).exists():
-                # Send Event Link Email
-                event_link = f"{MAIN_WEBSITE_URL}/events/{event_id}"
+        # If user exists, send event link email 
+        if user:
+            # Send Event Link Email (Login Link)
+            event_link = f"{MAIN_WEBSITE_URL}/events"
+            if event_id:
+                event_link += f"/{event_id}"
                 
-                subject = "Access Your Event"
-                message = f"""
-                <html>
-                    <body>
-                        <p>Hello {user.username},</p>
-                        <p>You are already registered for this event.</p>
-                        <p>Click the link below to access the event page:</p>
-                        <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
-                    </body>
-                </html>
-                """
-                send_zeptomail(user.email, subject, message)
+            subject = "Access Your Event"
+            message = f"""
+            <html>
+                <body>
+                    <p>Hello {user.username},</p>
+                    <p>You have requested access to an event.</p>
+                    <p>Please log in to continue to the event page:</p>
+                    <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
+                </body>
+            </html>
+            """
+            send_zeptomail(user.email, subject, message)
 
-                return Response({
-                    'status': 'already_registered',
-                    'message': 'You are already registered. We have sent the event link to your email.'
-                }, status=status.HTTP_200_OK)
+            return Response({
+                'status': 'existing_user',
+                'message': 'User already exists. We have sent the event link to your email.'
+            }, status=status.HTTP_200_OK)
 
-        if not user:
-            # Create new inactive user
-            user = User.objects.create_user(
-                username=username,
-                email=email,
-                password=None, # Unusable password
-                is_active=False
-            )
-            # IMPORTANT: We might need to ensure username uniqueness if it clashed above but fell through
-            # For this simple flow, we assume create_user handles uniqueness constraint (it raises IntegrityError)
-            
+        # Create new inactive user
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=None, # Unusable password
+            is_active=False
+        )
+        
         # Generate OTP
         EmailVerificationOTP.objects.filter(user=user, is_used=False).delete()
         otp_code = EmailVerificationOTP.generate_otp()
