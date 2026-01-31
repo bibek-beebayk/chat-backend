@@ -243,6 +243,8 @@ def register_for_event_view(request):
     }, status=status.HTTP_201_CREATED)
 
 
+from chat_project.utils import check_eligibility
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def check_eligibility_view(request):
@@ -256,28 +258,17 @@ def check_eligibility_view(request):
         return Response({'error': 'Event ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     event = get_object_or_404(Event, id=event_id)
-    from .models import EligibilityCheckRequest
-    
-    # Check if request already exists
-    eligibility_request, created = EligibilityCheckRequest.objects.get_or_create(
-        user=request.user,
-        event=event
-    )
-    
-    if eligibility_request.status == 'approved':
-         # If already approved, return eligible
-         return Response({'eligible': True})
-         
-    if eligibility_request.status == 'rejected':
-         # Reset to pending for retry
-         eligibility_request.status = 'pending'
-         eligibility_request.save()
+    # from .models import EligibilityCheckRequest
 
-    return Response({
-        'message': 'Your eligibility is being checked. Please check back in a while.',
-        'status': 'pending'
-    })
+    game_id = request.user.external_user_id
 
+    is_eligible = check_eligibility(game_id, event_id)
+
+    if is_eligible:
+        return Response({'eligible': True})
+    
+    return Response({'eligible': False})
+    
 
 from .serializers import SetPasswordSerializer
 from django.utils.http import urlsafe_base64_decode

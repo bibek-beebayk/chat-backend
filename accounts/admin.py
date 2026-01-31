@@ -8,7 +8,7 @@ class UserAdmin(admin.ModelAdmin):
     list_display = ['username', 'email', 'user_type', 'is_active', 'is_verified', 'external_user_id', 'is_staff']
     list_filter = ['user_type', 'is_active', 'is_verified', 'is_staff']
     search_fields = ['username', 'email', 'external_user_id']
-    readonly_fields = ['external_user_id']
+    # readonly_fields = ['external_user_id']
 
     def save_model(self, request, obj, form, change):
         if obj.pk:
@@ -160,6 +160,7 @@ class PlayerSearchAdmin(admin.ModelAdmin):
 def player_search_view(request):
     from django.shortcuts import render
     import requests
+    from django.conf import settings
     
     context = {
         **admin.site.each_context(request),
@@ -172,11 +173,13 @@ def player_search_view(request):
             context['username'] = username
             try:
                 # Backend fetch
-                url = f"https://dev.api.hi-rollin.online/api/v1/player/search?username={username}"
-                response = requests.get(url, headers={'x-secret-key': 'PfDAY2Q3gnlTU6hHr1rJOJJ3Ti2SyAW17m2fSEl9'})
+                url = f"{settings.PLAYER_DATA_API_BASE_URL}/player/transactions"
+                response = requests.get(url, headers={'x-secret-key': settings.PLAYER_DATA_API_KEY})
                 
                 # We can intercept/modify response here
                 data = response.json()
+
+                print("data", data)
                 
                 context['result'] = data
                 context['status_code'] = response.status_code

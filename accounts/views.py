@@ -7,7 +7,7 @@ from django.conf import settings
 from django.utils import timezone
 from .serializers import RegisterSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
 from .models import EmailVerificationOTP, VerificationRequest
-from chat_project.utils import send_zeptomail
+from chat_project.utils import send_zeptomail, search_player
 
 User = get_user_model()
 
@@ -389,18 +389,7 @@ def verify_user_id_view(request):
             {'error': 'Your account is already verified.'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
-    # Check if user already has a pending verification request
-    pending_request = VerificationRequest.objects.filter(
-        user=user,
-        status='pending'
-    ).first()
-    
-    if pending_request:
-        return Response(
-            {'error': 'You already have a pending verification request. Please wait for staff approval.'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+
         
     # Verify OTP
     try:
@@ -426,24 +415,36 @@ def verify_user_id_view(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Create verification request
-    event_id = request.data.get('event_id')
-    verification_request = VerificationRequest.objects.create(
-        user=user,
-        external_user_id=user_id,
-        status='pending',
-        event_id=event_id 
-    )
+    # Check if the user_id is already associated to existing user
+    if User.objects.filter(external_user_id=user_id).exists():
+        return Response(
+            {'message': 'This user_id is already associated with another account. Please contact support.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    res = search_player(user_id)
+    
+    if res:
+        user.is_verified = True
+        user.user_id = user_id
+        user.save()
+        return Response(
+            {
+                'message': 'Your verification was successful.',
+                'status': 'verified',
+            },
+            status=status.HTTP_200_OK
+        )
     
     return Response(
-        {
-            'message': 'Verification request submitted successfully. Please wait for staff approval.',
-            'status': 'pending',
-            'request_id': verification_request.id
-        },
-        status=status.HTTP_201_CREATED
-    )
+            {
+                'message': 'Verification Failed. Please Contact Support.',
+                'status': 'not verified',
+            },
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
+    
 from chat_project.utils import send_zeptomail
 @api_view(['POST'])
 @permission_classes([AllowAny])

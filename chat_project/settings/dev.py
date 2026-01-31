@@ -78,7 +78,7 @@ except ImportError:
 
 
 # ZeptoMail Configuration
-EMAIL_BACKEND = 'zepto_mail.backend.EmailBackend'
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 ZEPTOMAIL_API_KEY = "GkDdjPjeqQBKwVzCoY6xNdRTbZQ0tJPrF8jgMsoC80Av791ds0wefcFBkXUuzDYa7XPDAlfLdL938DPc57WCcSwpI3qvcUTuOpwzGB+edd0FvHvXUPiy9P9gXkbKmvGpNw9m6h8x9i9g4A=="
 ZEPTO_ORG_MAIL_TOKEN = ZEPTOMAIL_API_KEY
 ZEPTOMAIL_FROM = "noreply@hrlzone.com"
@@ -86,3 +86,6 @@ DEFAULT_FROM_EMAIL = ZEPTOMAIL_FROM
 SERVER_EMAIL = ZEPTOMAIL_FROM
 
 MAIN_WEBSITE_URL = "https://chatfe.worldstories.net"
+
+PLAYER_DATA_API_BASE_URL = "https://dev.api.hi-rollin.online/api/v1"
+PLAYER_DATA_API_KEY = "PfDAY2Q3gnlTU6hHr1rJOJJ3Ti2SyAW17m2fSEl9"
