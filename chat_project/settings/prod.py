@@ -126,7 +126,7 @@ sentry_sdk.init(
 # DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 # ZeptoMail Configuration
-EMAIL_BACKEND = 'zepto_mail.backend.EmailBackend'
+EMAIL_BACKEND = 'zoho_zeptomail.backend.zeptomail_backend.ZohoZeptoMailEmailBackend'
 ZEPTOMAIL_API_KEY = "GkDdjPjeqQBKwVzCoY6xNdRTbZQ0tJPrF8jgMsoC80Av791ds0wefcFBkXUuzDYa7XPDAlfLdL938DPc57WCcSwpI3qvcUTuOpwzGB+edd0FvHvXUPiy9P9gXkbKmvGpNw9m6h8x9i9g4A=="
 ZEPTO_ORG_MAIL_TOKEN = ZEPTOMAIL_API_KEY
 ZEPTOMAIL_FROM = "noreply@hrlzone.com"
