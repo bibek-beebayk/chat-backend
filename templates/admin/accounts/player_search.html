@@ -4,65 +4,35 @@
 <div id="content-main">
     <h1>Search Player</h1>
     <p>Enter a username to search for player details via the external API.</p>
-    
-    <div style="margin-bottom: 20px;">
-        <input type="text" id="usernameInput" placeholder="Enter username (e.g. player123)" value="player123" style="padding: 5px; width: 300px;">
-        <button onclick="searchPlayer()" class="button" style="padding: 5px 15px;">Search</button>
-    </div>
 
-    <div id="loading" style="display: none; color: #666;">Searching...</div>
-    <div id="error" style="display: none; color: #ba2121; margin-top: 10px;"></div>
-    
-    <div id="results" style="display: none; margin-top: 20px; border: 1px solid #ddd; padding: 15px; background: #fff;">
-        <h2 style="margin-top: 0;">API Response</h2>
-        <pre id="jsonOutput" style="background: #f5f5f5; padding: 10px; overflow-x: auto;"></pre>
+    <form method="POST" style="margin-bottom: 20px;">
+        {% csrf_token %}
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" name="username" placeholder="Enter username (e.g. player123)"
+                value="{{ username|default:'player123' }}" style="padding: 5px; width: 300px;">
+            <button type="submit" class="button" style="padding: 5px 15px;">Search</button>
+        </div>
+    </form>
+
+    {% if error %}
+    <div style="color: #ba2121; margin-top: 10px; padding: 10px; border: 1px solid #ba2121; background: #fff5f5;">
+        <strong>Error:</strong> {{ error }}
     </div>
+    {% endif %}
+
+    {% if result %}
+    <div style="margin-top: 20px; border: 1px solid #ddd; padding: 15px; background: #fff;">
+        <h2 style="margin-top: 0;">API Response (Status: {{ status_code }})</h2>
+        <pre style="background: #f5f5f5; padding: 10px; overflow-x: auto;">{{ result|json_script:"result-data" }}</pre>
+
+        {# A bit of a hack to pretty print the JSON from the context #}
+        <pre id="prettyJson"
+            style="background: #f5f5f5; padding: 10px; overflow-x: auto; font-family: monospace;"></pre>
+        <script>
+            const data = JSON.parse(document.getElementById('result-data').textContent);
+            document.getElementById('prettyJson').textContent = JSON.stringify(data, null, 2);
+        </script>
+    </div>
+    {% endif %}
 </div>
-
-<script>
-    async function searchPlayer() {
-        const username = document.getElementById('usernameInput').value;
-        const resultsDiv = document.getElementById('results');
-        const jsonOutput = document.getElementById('jsonOutput');
-        const loadingDiv = document.getElementById('loading');
-        const errorDiv = document.getElementById('error');
-
-        if (!username) {
-            alert('Please enter a username');
-            return;
-        }
-
-        // Reset UI
-        resultsDiv.style.display = 'none';
-        errorDiv.style.display = 'none';
-        loadingDiv.style.display = 'block';
-
-        try {
-            const response = await fetch(`https://dev.api.hi-rollin.online/api/v1/player/search?username=${encodeURIComponent(username)}`, {
-                method: 'GET',
-                headers: {
-                    'x-secret-key': 'api-key',
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            const data = await response.json();
-            
-            // Show results regardless of status code to inspect raw response
-            jsonOutput.textContent = JSON.stringify(data, null, 2);
-            resultsDiv.style.display = 'block';
-
-            if (!response.ok) {
-                errorDiv.textContent = `Server returned status: ${response.status}`;
-                errorDiv.style.display = 'block';
-            }
-        } catch (error) {
-            console.error(error);
-            errorDiv.textContent = `Error: ${error.message}`;
-            errorDiv.style.display = 'block';
-        } finally {
-            loadingDiv.style.display = 'none';
-        }
-    }
-</script>
 {% endblock %}

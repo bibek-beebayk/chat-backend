@@ -19,25 +19,6 @@ class UserAdmin(admin.ModelAdmin):
             obj.set_password(obj.password)
         super().save_model(request, obj, form, change)
 
-    def get_urls(self):
-        from django.urls import path
-        urls = super().get_urls()
-        custom_urls = [
-            path(
-                'player-search/',
-                self.admin_site.admin_view(self.player_search_view),
-                name='user_player_search',
-            ),
-        ]
-        return custom_urls + urls
-
-    def player_search_view(self, request):
-        from django.shortcuts import render
-        context = dict(
-           self.admin_site.each_context(request),
-        )
-        return render(request, "admin/accounts/player_search.html", context)
-
 
 @admin.register(EmailVerificationOTP)
 class EmailVerificationOTPAdmin(admin.ModelAdmin):
@@ -168,3 +149,39 @@ class VerificationRequestAdmin(admin.ModelAdmin):
             f'{rejected_count} verification request(s) rejected.'
         )
     reject_requests.short_description = 'Reject selected requests'
+
+from .models import PlayerSearch
+
+@admin.register(PlayerSearch)
+class PlayerSearchAdmin(admin.ModelAdmin):
+    def changelist_view(self, request, extra_context=None):
+        return player_search_view(request)
+
+def player_search_view(request):
+    from django.shortcuts import render
+    import requests
+    
+    context = {
+        **admin.site.each_context(request),
+        'title': 'Search Player',
+    }
+
+    if request.method == 'POST':
+        username = request.POST.get('username')
+        if username:
+            context['username'] = username
+            try:
+                # Backend fetch
+                url = f"https://dev.api.hi-rollin.online/api/v1/player/search?username={username}"
+                response = requests.get(url, headers={'x-secret-key': 'api-key'})
+                
+                # We can intercept/modify response here
+                data = response.json()
+                
+                context['result'] = data
+                context['status_code'] = response.status_code
+                
+            except Exception as e:
+                context['error'] = str(e)
+                
+    return render(request, "admin/accounts/player_search.html", context)

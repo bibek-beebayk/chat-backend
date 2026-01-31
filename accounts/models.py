@@ -150,7 +150,14 @@ class VerificationRequest(models.Model):
         verbose_name_plural = 'Verification Requests'
     
     def __str__(self):
-        return f"{self.user.username} - {self.external_user_id} ({self.status})"
+        return f"{self.user.username} - {self.status}"
+
+
+class PlayerSearch(User):
+    class Meta:
+        proxy = True
+        verbose_name = "Player Search"
+        verbose_name_plural = "Player Search"
     
     def approve(self, reviewed_by_user):
         """Approve the verification request and verify the user"""
