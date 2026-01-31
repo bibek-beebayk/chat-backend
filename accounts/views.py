@@ -426,7 +426,7 @@ def verify_user_id_view(request):
     
     if res:
         user.is_verified = True
-        user.user_id = user_id
+        user.external_user_id = user_id
         user.save()
         return Response(
             {
