@@ -19,6 +19,25 @@ class UserAdmin(admin.ModelAdmin):
             obj.set_password(obj.password)
         super().save_model(request, obj, form, change)
 
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path(
+                'player-search/',
+                self.admin_site.admin_view(self.player_search_view),
+                name='user_player_search',
+            ),
+        ]
+        return custom_urls + urls
+
+    def player_search_view(self, request):
+        from django.shortcuts import render
+        context = dict(
+           self.admin_site.each_context(request),
+        )
+        return render(request, "admin/accounts/player_search.html", context)
+
 
 @admin.register(EmailVerificationOTP)
 class EmailVerificationOTPAdmin(admin.ModelAdmin):
