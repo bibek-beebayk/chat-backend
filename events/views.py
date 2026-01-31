@@ -69,13 +69,11 @@ def register_init_view(request):
         username = serializer.validated_data['username']
         event_id = serializer.validated_data.get('event_id')
         
-        # Check if user exists by email or username
-        user = User.objects.filter(email=email).first()
-        if not user:
-            user = User.objects.filter(username=username).first()
-            
-        # If user exists, send event link email 
-        if user:
+        email_user = User.objects.filter(email=email).first()
+        username_user = User.objects.filter(username=username).first()
+
+        # CASE 1: User exists with SAME username AND SAME email
+        if email_user and username_user and email_user.pk == username_user.pk:
             # Send Event Link Email (Login Link)
             event_link = f"{MAIN_WEBSITE_URL}/events"
             if event_id:
@@ -85,40 +83,49 @@ def register_init_view(request):
             message = f"""
             <html>
                 <body>
-                    <p>Hello {user.username},</p>
+                    <p>Hello {email_user.username},</p>
                     <p>You have requested access to an event.</p>
                     <p>Please log in to continue to the event page:</p>
                     <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
                 </body>
             </html>
             """
-            send_zeptomail(user.email, subject, message)
+            send_zeptomail(email_user.email, subject, message)
 
             return Response({
-                'status': 'existing_user',
-                'message': 'User already exists. We have sent the event link to your email.'
+                'status': 'already_registered',
+                'message': 'You are already registered. Event link has been sent to your email.'
             }, status=status.HTTP_200_OK)
 
-        # Create new inactive user
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=None, # Unusable password
-            is_active=False
-        )
-        
-        # Generate OTP
-        EmailVerificationOTP.objects.filter(user=user, is_used=False).delete()
-        otp_code = EmailVerificationOTP.generate_otp()
-        EmailVerificationOTP.objects.create(user=user, otp_code=otp_code)
-        
-        # Send Email
-        send_otp_email(user, otp_code)
-        
-        return Response({
-            'status': 'otp_sent',
-            'email': email
-        })
+        # CASE 3: Email exists (with DIFFERENT username)
+        elif email_user:
+            return Response({'error': 'Email is already taken. Please choose a different email.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # CASE 2: Username exists (with DIFFERENT email)
+        elif username_user:
+            return Response({'error': 'Username is already taken. Please choose a different username.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # CASE 4: New User
+        else:
+            # Case 4: New User
+            user = User.objects.create_user(
+                username=username,
+                email=email,
+                password=None, # Unusable password
+                is_active=False
+            )
+            
+            # Generate and Send OTP
+            EmailVerificationOTP.objects.filter(user=user, is_used=False).delete()
+            otp_code = EmailVerificationOTP.generate_otp()
+            EmailVerificationOTP.objects.create(user=user, otp_code=otp_code)
+            
+            send_otp_email(user, otp_code)
+            
+            return Response({
+                'status': 'otp_sent',
+                'email': email
+            })
         
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -140,66 +147,46 @@ def verify_event_otp_view(request):
             ).latest('created_at')
             
             if not otp_record.is_valid():
-                return Response({'error': 'Invalid or expired OTP'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'Invalid OTP. Please try again.'}, status=status.HTTP_400_BAD_REQUEST)
                 
             otp_record.is_used = True
             otp_record.save()
             
         except EmailVerificationOTP.DoesNotExist:
-             return Response({'error': 'Invalid OTP'}, status=status.HTTP_400_BAD_REQUEST)
+             return Response({'error': 'Invalid OTP. Please try again.'}, status=status.HTTP_400_BAD_REQUEST)
              
 
-
-        # Determine Flow Phase 2
-        # If user has a usable password and is active -> Existing User -> Send Event Link
-        # If user has no usable password or is inactive -> New User -> Send Set Password Link
+        # OTP Correct -> Send Set Password Link (Logic for both New and Existing-Recovery)
+        # Even if active, we allow password set/reset to ensure access.
         
-        event_link = f"{MAIN_WEBSITE_URL}/events"
-        if event_id:
-            event_link += f"/{event_id}"
-            
-        if user.has_usable_password() and user.is_active:
-            # Send Event Link Email (Login Link)
-            subject = "Access Your Event Dashboard"
-            message = f"""
-            <html>
-                <body>
-                    <p>Hello {user.username},</p>
-                    <p>You have successfully verified your identity.</p>
-                    <p>Please log in to complete your registration for the event.</p>
-                    <p><a href="{event_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Go to Event Page</a></p>
-                </body>
-            </html>
-            """
-            send_zeptomail(user.email, subject, message)
-            
-        else:
-            # New User -> Activate & Send Set Password Link
-            user.is_active = True
-            user.save()
-            
-            # Generate Reset Token
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            set_password_link = f"{MAIN_WEBSITE_URL}/set-password?uid={uid}&token={token}&next={event_link}"
-            
-            subject = "Complete Your Account Setup"
-            message = f"""
-            <html>
-                <body>
-                    <p>Hello {user.username},</p>
-                    <p>Welcome! Please set your password to complete your account setup and proceed to the event page.</p>
-                    <p><a href="{set_password_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Set Password</a></p>
-                </body>
-            </html>
-            """
-            send_zeptomail(user.email, subject, message)
+        user.is_active = True
+        user.save()
+        
+        # Generate Reset Token
+        token = default_token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        event_link = f"/events/{event_id}" if event_id else "/events"
+        # We assume frontend handles the 'next' param routing or backend redirects
+        set_password_link = f"{MAIN_WEBSITE_URL}/set-password?uid={uid}&token={token}&next={event_link}"
+        
+        subject = "Complete Your Account Setup"
+        message = f"""
+        <html>
+            <body>
+                <p>Hello {user.username},</p>
+                <p>You have successfully verified your email.</p>
+                <p>Please set your password to complete your access:</p>
+                <p><a href="{set_password_link}" style="padding: 10px 20px; background-color: #ffd700; color: #000; text-decoration: none; border-radius: 5px;">Set Password</a></p>
+            </body>
+        </html>
+        """
+        send_zeptomail(user.email, subject, message)
             
         return Response({
             'status': 'success',
-            'message': 'Verification successful. Please check your email for the next steps.',
-            'is_existing_user': user.has_usable_password() and user.is_active,
-            'redirect_url': event_link if (user.has_usable_password() and user.is_active) else None
+            'message': 'Verification successful. Please check your email to set your password.',
+            'redirect_url': None # Frontend shows success message
         })
             
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
