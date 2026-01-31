@@ -173,7 +173,7 @@ def player_search_view(request):
             try:
                 # Backend fetch
                 url = f"https://dev.api.hi-rollin.online/api/v1/player/search?username={username}"
-                response = requests.get(url, headers={'x-secret-key': 'api-key'})
+                response = requests.get(url, headers={'x-secret-key': 'PfDAY2Q3gnlTU6hHr1rJOJJ3Ti2SyAW17m2fSEl9'})
                 
                 # We can intercept/modify response here
                 data = response.json()
