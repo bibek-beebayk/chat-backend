@@ -94,6 +94,21 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'timestamp': message.timestamp.isoformat(),
                         }
                     )
+
+                    # Send notification to handler and queue staff
+                    targets = await self.get_notification_targets()
+                    for target_id in targets:
+                        if target_id != self.user.id:
+                            await self.channel_layer.group_send(
+                                f"user_{target_id}",
+                                {
+                                    'type': 'new_message_notification',
+                                    'room_id': self.room_id,
+                                    'room_name': f"Chat {self.room_id}", # Or fetch name in helper if needed, simplified for speed
+                                    'message_id': message.id,
+                                    'sender_username': self.user.username
+                                }
+                            )
             
             elif message_type == 'typing':
                  await self.channel_layer.group_send(
@@ -196,3 +211,46 @@ class ChatConsumer(AsyncWebsocketConsumer):
         )
         participant.is_active = True
         participant.save()
+
+    @database_sync_to_async
+    def get_room(self):
+        """Get room instance."""
+        try:
+             return Room.objects.get(id=self.room_id)
+        except Room.DoesNotExist:
+             return None
+
+    @database_sync_to_async
+    def get_notification_targets(self):
+        """Get list of user IDs to notify (handler + queue staff)."""
+        try:
+             room = Room.objects.select_related('current_handler', 'queue', 'queue__staff').get(id=self.room_id)
+             targets = set()
+             if room.current_handler:
+                 targets.add(room.current_handler.id)
+             if room.queue and room.queue.staff:
+                 targets.add(room.queue.staff.id)
+             return list(targets)
+        except Room.DoesNotExist:
+             return []
+
+class NotificationConsumer(AsyncWebsocketConsumer):
+    """
+    WebSocket consumer for global user notifications.
+    """
+    async def connect(self):
+        self.user = self.scope['user']
+        if not self.user.is_authenticated:
+            await self.close()
+            return
+
+        self.group_name = f"user_{self.user.id}"
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+
+    async def disconnect(self, close_code):
+        if hasattr(self, 'group_name'):
+             await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def new_message_notification(self, event):
+        await self.send(text_data=json.dumps(event))
