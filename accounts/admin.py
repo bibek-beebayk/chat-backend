@@ -173,7 +173,7 @@ def player_search_view(request):
             context['username'] = username
             try:
                 # Backend fetch
-                url = f"{settings.PLAYER_DATA_API_BASE_URL}/player/transactions"
+                url = f"{settings.PLAYER_DATA_API_BASE_URL}/player/search?username={username}"
                 response = requests.get(url, headers={'x-secret-key': settings.PLAYER_DATA_API_KEY})
                 
                 # We can intercept/modify response here
