@@ -438,7 +438,7 @@ def verify_user_id_view(request):
     
     return Response(
             {
-                'message': 'Verification Failed. Please Contact Support.',
+                'message': 'We could not find the game id you provided. Please Contact Support.',
                 'status': 'not verified',
             },
             status=status.HTTP_400_BAD_REQUEST
