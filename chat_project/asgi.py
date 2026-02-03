@@ -12,6 +12,7 @@ django.setup()
 
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
+from channels.security.websocket import AllowedHostsOriginValidator
 from chat import routing
 
 
@@ -21,10 +22,12 @@ from chat.middleware import QueryAuthMiddleware
 
 application = ProtocolTypeRouter({
     "http": django_asgi_app,
-    "websocket": QueryAuthMiddleware(
-        AuthMiddlewareStack(
-            URLRouter(
-                routing.websocket_urlpatterns
+    "websocket": AllowedHostsOriginValidator(
+        QueryAuthMiddleware(
+            AuthMiddlewareStack(
+                URLRouter(
+                    routing.websocket_urlpatterns
+                )
             )
         )
     ),

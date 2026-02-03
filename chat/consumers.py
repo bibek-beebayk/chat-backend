@@ -3,6 +3,11 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 from .models import Room, Message, RoomParticipant
+from notifications.models import UserPresence
+from django.utils import timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -224,19 +229,36 @@ class ChatConsumer(AsyncWebsocketConsumer):
     def get_notification_targets(self):
         """Get list of user IDs to notify (handler + queue staff)."""
         try:
-             room = Room.objects.select_related('current_handler', 'queue', 'queue__staff').get(id=self.room_id)
+             room = Room.objects.select_related('current_handler', 'queue', 'queue__staff', 'client').get(id=self.room_id)
              targets = set()
+             
+             # Logic similar to signals.py: Notify everyone else involved
+             
+             # 1. Client
+             if room.client:
+                 targets.add(room.client.id)
+                 
+             # 2. Handler
              if room.current_handler:
                  targets.add(room.current_handler.id)
+                 
+             # 3. Queue Staff (Optional, maybe only if no handler?)
              if room.queue and room.queue.staff:
                  targets.add(room.queue.staff.id)
+
+             # 4. Room Participants (e.g. for group chats or backup)
+             # This is crucial if logic above misses someone
+             participants = RoomParticipant.objects.filter(room=room, is_active=True).values_list('user_id', flat=True)
+             for uid in participants:
+                 targets.add(uid)
+
              return list(targets)
         except Room.DoesNotExist:
              return []
 
 class NotificationConsumer(AsyncWebsocketConsumer):
     """
-    WebSocket consumer for global user notifications.
+    WebSocket consumer for global user notifications and presence tracking.
     """
     async def connect(self):
         self.user = self.scope['user']
@@ -248,9 +270,39 @@ class NotificationConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
+        # Update presence to ONLINE
+        await self.update_presence('ONLINE')
+
     async def disconnect(self, close_code):
         if hasattr(self, 'group_name'):
              await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        
+        # Update presence to OFFLINE
+        await self.update_presence('OFFLINE')
+
+    async def receive(self, text_data):
+        """Handle heartbeat and other control messages."""
+        try:
+            data = json.loads(text_data)
+            msg_type = data.get('type')
+            
+            if msg_type == 'heartbeat':
+                await self.update_presence('ONLINE')
+                
+        except json.JSONDecodeError:
+            pass
 
     async def new_message_notification(self, event):
         await self.send(text_data=json.dumps(event))
+
+    @database_sync_to_async
+    def update_presence(self, status):
+        """Update user presence status."""
+        if not self.user.is_authenticated:
+            return
+
+        presence, _ = UserPresence.objects.get_or_create(user=self.user)
+        presence.status = status
+        presence.socket_id = self.channel_name
+        presence.last_seen = timezone.now()
+        presence.save()
