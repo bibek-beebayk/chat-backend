@@ -6,9 +6,11 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from accounts.admin import player_search_view as admin_player_search_view
+from analytics.admin import dashboard_view
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('admin/', dashboard_view), # Override default admin index
+    path('admin/', admin.site.urls), # Standard handling for other paths
     path('api/auth/', include('accounts.urls')),
     path('api/', include('chat.urls')),
     path('api/posts/', include('posts.urls')),
