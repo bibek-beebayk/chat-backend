@@ -179,7 +179,7 @@ def player_search_view(request):
                 # We can intercept/modify response here
                 data = response.json()
 
-                print("data", data)
+                # print("data", data)
                 
                 context['result'] = data
                 context['status_code'] = response.status_code

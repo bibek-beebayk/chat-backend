@@ -41,7 +41,7 @@ def search_player(username):
         return data["exists"]
         
     except Exception as e:
-        print(e)
+        logger.error(f"Error sending email: {e}")
         return None
 
 

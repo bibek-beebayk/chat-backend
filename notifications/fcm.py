@@ -77,11 +77,11 @@ def send_push_notification(user_tokens, title, body, link=None):
     try:
         # Batch send
         batch_response = messaging.send_each(messages)
-        print(f"FCM Send Result: {batch_response.success_count} success, {batch_response.failure_count} failures")
+        logger.info(f"FCM Send Result: {batch_response.success_count} success, {batch_response.failure_count} failures")
         if batch_response.failure_count > 0:
              for idx, resp in enumerate(batch_response.responses):
                  if not resp.success:
-                     print(f"FCM Failure {idx}: {resp.exception}")
+                     logger.warning(f"FCM Failure {idx}: {resp.exception}")
         return batch_response.success_count
     except Exception as e:
         logger.error(f"Error sending FCM messages: {e}")

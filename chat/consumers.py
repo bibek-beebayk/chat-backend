@@ -262,7 +262,9 @@ class NotificationConsumer(AsyncWebsocketConsumer):
     """
     async def connect(self):
         self.user = self.scope['user']
+        print(f"DEBUG: NotificationConsumer connect for user: {self.user}")
         if not self.user.is_authenticated:
+            print("DEBUG: NotificationConsumer rejecting unauthenticated user")
             await self.close()
             return
 

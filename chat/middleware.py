@@ -41,7 +41,22 @@ class QueryAuthMiddleware(BaseMiddleware):
         # Use token if provided
         if token:
             user = await get_user_from_jwt(token)
-            if user:
+            print(f"DEBUG: Middleware resolved user: {user} (Auth: {user.is_authenticated})")
+            if user and user.is_authenticated:
                 scope['user'] = user
+            else:
+                scope['user'] = AnonymousUser()
+        else:
+            print("DEBUG: Middleware found no token")
+            # Ensure user is set to Anonymous if not already
+            if 'user' not in scope:
+                scope['user'] = AnonymousUser()
                 
-        return await super().__call__(scope, receive, send)
+        # Call inner app directly to ensure scope changes persist
+        try:
+            return await self.inner(scope, receive, send)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"DEBUG: Middleware exception: {e}")
+            raise e

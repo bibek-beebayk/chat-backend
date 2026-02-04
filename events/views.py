@@ -33,7 +33,7 @@ def get_latest_event(request):
         
         # Check registration status if user is authenticated
         if request.user.is_authenticated:
-            print(f"DEBUG: User {request.user.username} is authenticated")
+    # Debug prints removed
             data['is_registered'] = EventRegistration.objects.filter(user=request.user, event=event).exists()
             
             from .models import EligibilityCheckRequest
