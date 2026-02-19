@@ -13,8 +13,11 @@ class PushTokenViewSet(viewsets.GenericViewSet, mixins.CreateModelMixin):
         fcm_token = request.data.get('fcm_token')
         if not fcm_token:
             return Response({'error': 'fcm_token required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Deactivate this token for any OTHER users (device changed accounts)
+        PushToken.objects.filter(fcm_token=fcm_token).exclude(user=request.user).update(is_active=False)
             
-        # Update or Create
+        # Update or Create for the current user
         token, created = PushToken.objects.update_or_create(
             user=request.user,
             fcm_token=fcm_token,
