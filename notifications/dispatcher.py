@@ -80,7 +80,8 @@ class MessageDispatcher:
             return
 
         # Prepare payload
-        title = f"New message from {message.sender.username}"
+        sender_name = "Hi-Rollin" if message.sender.is_staff else message.sender.username
+        title = f"New message from {sender_name}"
         body = message.content[:100] # Truncate check
         link = f"/chat/{message.room.id}" # Deep link
         
