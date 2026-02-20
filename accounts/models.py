@@ -15,6 +15,11 @@ class User(AbstractUser):
         ('agent', 'Agent'),
         ('staff', 'Staff'),
     ]
+
+    email = models.EmailField(
+        unique=True,
+        help_text='Required. Must be unique.'
+    )
     
     user_type = models.CharField(
         max_length=10,
