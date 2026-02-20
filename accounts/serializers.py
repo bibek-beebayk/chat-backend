@@ -103,7 +103,24 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class ForgotPasswordInitiateSerializer(serializers.Serializer):
     """Serializer for initiating password reset."""
-    email = serializers.EmailField(required=True)
+    email = serializers.EmailField(required=False)
+    username = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, data):
+        # Accept either `email` or `username`, normalize to `identifier`.
+        identifier = data.get('email')
+        if not identifier:
+            identifier = data.get('username')
+            if identifier:
+                identifier = identifier.strip()
+
+        if not identifier:
+            raise serializers.ValidationError({
+                'detail': 'Provide either email or username.'
+            })
+
+        data['identifier'] = identifier
+        return data
 
 
 class VerifyResetOTPSerializer(VerifyOTPSerializer):
