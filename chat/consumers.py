@@ -95,6 +95,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'message': content,
                             'username': self.user.username,
                             'user_id': self.user.id,
+                            'user_type': self.user.user_type,
                             'message_id': message.id,
                             'timestamp': message.timestamp.isoformat(),
                         }
@@ -135,6 +136,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message': event['message'],
             'username': event['username'],
             'user_id': event['user_id'],
+            'user_type': event.get('user_type', 'client'),
             'message_id': event['message_id'],
             'timestamp': event['timestamp'],
             'attachment': event.get('attachment'),
