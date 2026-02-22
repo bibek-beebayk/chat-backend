@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
+from django.db.models import Q
 from .serializers import RegisterSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
 from .models import EmailVerificationOTP, VerificationRequest
 from chat_project.utils import send_zeptomail, search_player
@@ -502,15 +503,16 @@ def initiate_password_reset_view(request):
     if not serializer.is_valid():
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-    email = serializer.validated_data['email']
-    
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
+    identifier = serializer.validated_data['identifier']
+
+    user = User.objects.filter(
+        Q(email__iexact=identifier) | Q(username__iexact=identifier)
+    ).first()
+    if not user:
         # Security: Don't reveal if user exists or not, or simply return 404 if less security concern
         # For better UX in this context, we'll return 404 to let user know to register
         return Response(
-            {'error': 'No account found with this email address.'},
+            {'error': 'No account found with this email or username.'},
             status=status.HTTP_404_NOT_FOUND
         )
         
