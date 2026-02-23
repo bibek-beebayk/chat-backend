@@ -75,8 +75,7 @@ class MessageDispatcher:
         token_list = list(tokens)
         
         if not token_list:
-            logger.info(f"No push tokens for {user.username}. Falling back to Email.")
-            MessageDispatcher._schedule_email(message, user)
+            logger.info(f"No push tokens for {user.username}. Push aborted.")
             return
 
         # Prepare payload
@@ -110,61 +109,10 @@ class MessageDispatcher:
                 delivery.status = 'failed'
                 delivery.error_message = "FCM returned 0 success"
                 delivery.save()
-                # Fallback
-                MessageDispatcher._schedule_email(message, user)
                 
         except Exception as e:
             delivery.status = 'failed'
             delivery.error_message = str(e)
             delivery.save()
-            MessageDispatcher._schedule_email(message, user)
 
-    @staticmethod
-    def _schedule_email(message, user):
-        """
-        Fallback to Email.
-        """
-        # Create Delivery Record
-        delivery = MessageDelivery.objects.create(
-            message=message,
-            user=user,
-            channel='email',
-            status='pending' 
-        )
-        
-        # Check if user has been inactive for at least 5 minutes
-        # If they just went offline (e.g. < 5 mins ago), we do NOT send immediately.
-        # We leave it as 'pending' to be picked up by a potential background job or explicit retry.
-        # Given current constraints without background workers, we simply enforce the policy:
-        # If offline < 5 mins, we SKIP sending email now.
-        
-        try:
-            presence = user.presence
-            time_since_seen = (timezone.now() - presence.last_seen).total_seconds()
-            if time_since_seen < 300: # 5 minutes
-                logger.info(f"Skipping email for {user.username}: Only offline for {int(time_since_seen)}s")
-                delivery.status = 'skipped_recent'
-                delivery.save()
-                return
-        except UserPresence.DoesNotExist:
-            # If no presence record, assume long offline
-            pass
-        
-        # Check rate limits or user preferences?
-        # Send Email
-        from chat_project.utils import send_zeptomail
-        
-        try:
-             # Basic email content
-             subject = "You have a new message on Rollin Community"
-             body = f"Hello {user.username},<br><br>You have a new message from {message.sender.username}.<br><br>Content: {message.content[:50]}...<br><a href='https://community.hrlzone.com/chat'>Go to Chat</a>"
-             
-             send_zeptomail(user.email, subject, f"<html><body>{body}</body></html>")
-             
-             delivery.status = 'sent'
-             delivery.save()
-             
-        except Exception as e:
-             delivery.status = 'failed'
-             delivery.error_message = str(e)
-             delivery.save()
+
