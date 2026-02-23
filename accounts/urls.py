@@ -18,4 +18,5 @@ urlpatterns = [
     path('forgot-password/initiate/', views.initiate_password_reset_view, name='forgot-password-initiate'),
     path('forgot-password/verify-otp/', views.verify_reset_otp_view, name='forgot-password-verify-otp'),
     path('forgot-password/complete/', views.reset_password_complete_view, name='forgot-password-complete'),
+    path('app-version/', views.latest_app_version_view, name='app-version'),
 ]

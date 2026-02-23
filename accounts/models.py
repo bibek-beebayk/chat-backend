@@ -242,3 +242,46 @@ class PlayerSearch(User):
             )
         except Exception:
             pass  # Don't fail the transaction if email fails
+
+class AppVersion(models.Model):
+    """
+    Singleton model to track the most recent mandatory app version and hold the APK file.
+    """
+    version_code = models.CharField(
+        max_length=20,
+        help_text="The version string matching pubspec.yaml (e.g., '1.0.0+1')"
+    )
+    is_mandatory = models.BooleanField(
+        default=True,
+        help_text="Whether users are forced to update to this version"
+    )
+    release_notes = models.TextField(
+        blank=True,
+        help_text="Information about what is new in this release"
+    )
+    apk_file = models.FileField(
+        upload_to='app_releases/',
+        null=True,
+        blank=True,
+        help_text="The actual Android .apk file for download"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(
+        default=True,
+        help_text="If multiple versions exist, only the one marked is_active is served to clients."
+    )
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'App Release Version'
+        verbose_name_plural = 'App Release Versions'
+
+    def __str__(self):
+        return f"App Version {self.version_code}"
+    
+    def save(self, *args, **kwargs):
+        # Guarantee singleton-like active state
+        if self.is_active:
+            # We must commit it but prevent recursion or query errors if new
+            AppVersion.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
+        super().save(*args, **kwargs)

@@ -1,7 +1,13 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
-from .models import User, EmailVerificationOTP, VerificationRequest
+from .models import User, EmailVerificationOTP, VerificationRequest, AppVersion
+
+@admin.register(AppVersion)
+class AppVersionAdmin(admin.ModelAdmin):
+    list_display = ['version_code', 'is_active', 'is_mandatory', 'created_at']
+    list_filter = ['is_active', 'is_mandatory']
+    search_fields = ['version_code']
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):

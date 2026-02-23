@@ -630,3 +630,32 @@ def reset_password_complete_view(request):
     # Auto-login? Or just success message?
     # Let's just return success and let them login
     return Response({'message': 'Password has been reset successfully. Please login with your new password.'}, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def latest_app_version_view(request):
+    """
+    Returns the currently active latest App Version configuration.
+    """
+    from .models import AppVersion
+    
+    version = AppVersion.objects.filter(is_active=True).first()
+    
+    if not version:
+        return Response({
+            'version_code': '1.0.0+1',
+            'is_mandatory': False,
+            'release_notes': '',
+            'apk_url': None
+        }, status=status.HTTP_200_OK)
+        
+    apk_url = None
+    if version.apk_file:
+        apk_url = request.build_absolute_uri(version.apk_file.url)
+        
+    return Response({
+        'version_code': version.version_code,
+        'is_mandatory': version.is_mandatory,
+        'release_notes': version.release_notes,
+        'apk_url': apk_url
+    }, status=status.HTTP_200_OK)
