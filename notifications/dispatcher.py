@@ -3,6 +3,8 @@ from .models import UserPresence, MessageDelivery, PushToken, Notification
 from .fcm import send_push_notification
 from chat.models import Message
 import logging
+import threading
+from django.db import close_old_connections
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +13,28 @@ class MessageDispatcher:
     Core Logic for routing messages based on User Presence.
     """
     
+    @staticmethod
+    def dispatch_async(message, target_user):
+        """
+        Non-blocking entry point. Offloads dispatch logic to a background thread.
+        Crucial for preventing synchronous FCM HTTP requests from blocking the 
+        Django Channels WebSocket threadpool or database `post_save` signals.
+        """
+        def _thread_target(msg, tgt):
+            try:
+                MessageDispatcher.dispatch(msg, tgt)
+            finally:
+                # Essential: Release the database connection back to the pool 
+                # before the thread dies to prevent connection leaking.
+                close_old_connections()
+
+        thread = threading.Thread(
+            target=_thread_target,
+            args=(message, target_user),
+            daemon=True
+        )
+        thread.start()
+
     @staticmethod
     def dispatch(message, target_user):
         """

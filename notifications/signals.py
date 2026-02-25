@@ -48,6 +48,6 @@ def handle_new_message(sender, instance, created, **kwargs):
             if p.user.id != sender_id and p.user not in targets:
                 targets.append(p.user)
                 
-        # Dispatch to each target
+        # Dispatch to each target non-blockingly
         for target in targets:
-             MessageDispatcher.dispatch(instance, target)
+             MessageDispatcher.dispatch_async(instance, target)
