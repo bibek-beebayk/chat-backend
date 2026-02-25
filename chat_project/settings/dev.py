@@ -16,7 +16,7 @@ ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'betunnel.worldstories.net', '*']
 # Default to SQLite/Postgres as per original settings.py
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql_psycopg2",
+        "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ.get("PGDATABASE", "chat_db"),
         "USER": os.environ.get("PGUSER", "postgres"),
         "PASSWORD": os.environ.get("PGPASSWORD", "postgres"),
@@ -61,14 +61,14 @@ CSRF_TRUSTED_ORIGINS = [
 # Session settings
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = 'Lax'
-SESSION_COOKIE_SECURE = True  # Set to True in production with HTTPS
-SESSION_COOKIE_DOMAIN = '.worldstories.net'
+SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+# SESSION_COOKIE_DOMAIN = '.worldstories.net' # Disabled for local dev
 
 # CSRF settings
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = False
 CSRF_COOKIE_HTTPONLY = False 
 CSRF_COOKIE_SAMESITE = 'Lax'
-CSRF_COOKIE_DOMAIN = '.worldstories.net'
+# CSRF_COOKIE_DOMAIN = '.worldstories.net' # Disabled for local dev
 
 # Import local env settings
 try:
