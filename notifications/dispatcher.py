@@ -73,8 +73,10 @@ class MessageDispatcher:
                 channel='ws',
                 status='delivered' # Optimistic
             )
-            # Maybe send a "Silent" push or just update badge?
-            # For now, relying on WS.
+            # Reliability fallback:
+            # presence can be stale for a short window after abrupt app close.
+            # Send push as well to avoid missing the first offline message.
+            MessageDispatcher._send_push(message, target_user)
 
         elif status in ['IDLE', 'OFFLINE', 'DISCONNECTED']:
             # Send Push
