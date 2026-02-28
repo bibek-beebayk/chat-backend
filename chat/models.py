@@ -24,10 +24,15 @@ class SupportRoom(models.Model):
         limit_choices_to={'user_type': 'staff'}
     )
     is_active = models.BooleanField(default=False)
+    is_test_room = models.BooleanField(
+        default=False,
+        help_text='If true, this support room is visible only to test users/staff.'
+    )
 
     def __str__(self):
         status = f"Occupied by {self.staff.username}" if self.staff else "Empty"
-        return f"{self.name} ({status})"
+        prefix = "[TEST] " if self.is_test_room else ""
+        return f"{prefix}{self.name} ({status})"
 
 
 class Room(models.Model):
@@ -58,6 +63,10 @@ class Room(models.Model):
         blank=True,
         related_name='queued_chats'
     )
+    is_test_room = models.BooleanField(
+        default=False,
+        help_text='If true, this chat room is isolated for test users/staff.'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=(('OPEN', 'Open'), ('CLOSED', 'Closed')), default='OPEN')
     
@@ -68,6 +77,10 @@ class Room(models.Model):
     def save(self, *args, **kwargs):
         if not self.name and self.client:
             self.name = f"chat_{self.client.username}"
+        if self.client:
+            self.is_test_room = bool(self.client.is_test_user)
+        elif self.queue:
+            self.is_test_room = bool(self.queue.is_test_room)
         super().save(*args, **kwargs)
     
     class Meta:

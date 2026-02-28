@@ -11,7 +11,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'user_type', 'is_verified', 'email', 'first_name', 'last_name', 'verification_status']
+        fields = ['id', 'username', 'user_type', 'is_verified', 'is_test_user', 'email', 'first_name', 'last_name', 'verification_status']
         read_only_fields = ['id']
 
     def get_verification_status(self, obj):

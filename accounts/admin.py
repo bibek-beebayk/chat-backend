@@ -11,8 +11,8 @@ class AppVersionAdmin(admin.ModelAdmin):
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ['username', 'email', 'user_type', 'is_active', 'is_verified', 'external_user_id', 'is_staff']
-    list_filter = ['user_type', 'is_active', 'is_verified', 'is_staff']
+    list_display = ['username', 'email', 'user_type', 'is_test_user', 'is_active', 'is_verified', 'external_user_id', 'is_staff']
+    list_filter = ['user_type', 'is_test_user', 'is_active', 'is_verified', 'is_staff']
     search_fields = ['username', 'email', 'external_user_id']
     # readonly_fields = ['external_user_id']
 

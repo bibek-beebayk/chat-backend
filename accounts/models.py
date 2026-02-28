@@ -32,6 +32,10 @@ class User(AbstractUser):
         default=False,
         help_text='Designates whether this user has verified their account.'
     )
+    is_test_user = models.BooleanField(
+        default=False,
+        help_text='Designates whether this account is isolated to test support rooms.'
+    )
     external_user_id = models.CharField(
         max_length=100,
         blank=True,

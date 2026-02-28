@@ -194,8 +194,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
     
     @database_sync_to_async
     def check_room_exists(self):
-        """Check if room exists."""
-        return Room.objects.filter(id=self.room_id, status='OPEN').exists()
+        """Check if room exists and belongs to the caller's test scope."""
+        try:
+            room = Room.objects.select_related('queue', 'client').get(
+                id=self.room_id,
+                status='OPEN',
+            )
+        except Room.DoesNotExist:
+            return False
+
+        user_is_test = bool(getattr(self.user, 'is_test_user', False))
+        if bool(room.is_test_room) != user_is_test:
+            return False
+
+        if self.user.user_type == 'staff':
+            return (
+                room.current_handler_id == self.user.id
+                or (room.queue_id is not None and self.user.active_support_rooms.filter(id=room.queue_id).exists())
+                or room.participants.filter(user=self.user, is_active=True).exists()
+            )
+
+        return room.client_id == self.user.id
     
     @database_sync_to_async
     def save_message(self, content):
@@ -233,24 +252,29 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
              room = Room.objects.select_related('current_handler', 'queue', 'queue__staff', 'client').get(id=self.room_id)
              targets = set()
+             scope_is_test = bool(room.is_test_room)
              
              # Logic similar to signals.py: Notify everyone else involved
              
              # 1. Client
-             if room.client:
+             if room.client and bool(getattr(room.client, 'is_test_user', False)) == scope_is_test:
                  targets.add(room.client.id)
                  
              # 2. Handler
-             if room.current_handler:
+             if room.current_handler and bool(getattr(room.current_handler, 'is_test_user', False)) == scope_is_test:
                  targets.add(room.current_handler.id)
                  
              # 3. Queue Staff (Optional, maybe only if no handler?)
-             if room.queue and room.queue.staff:
+             if room.queue and room.queue.staff and bool(getattr(room.queue.staff, 'is_test_user', False)) == scope_is_test:
                  targets.add(room.queue.staff.id)
 
              # 4. Room Participants (e.g. for group chats or backup)
              # This is crucial if logic above misses someone
-             participants = RoomParticipant.objects.filter(room=room, is_active=True).values_list('user_id', flat=True)
+             participants = RoomParticipant.objects.filter(
+                 room=room,
+                 is_active=True,
+                 user__is_test_user=scope_is_test,
+             ).values_list('user_id', flat=True)
              for uid in participants:
                  targets.add(uid)
 

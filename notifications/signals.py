@@ -26,6 +26,7 @@ def handle_new_message(sender, instance, created, **kwargs):
         
         room = instance.room
         sender_id = instance.sender.id
+        scope_is_test = bool(room.is_test_room)
         
         # Get all participants
         # We can use RoomParticipant model or Room fields
@@ -33,17 +34,21 @@ def handle_new_message(sender, instance, created, **kwargs):
         targets = []
         
         # Check explicit Room fields first (One-to-One logic)
-        if room.client and room.client.id != sender_id:
+        if room.client and room.client.id != sender_id and bool(getattr(room.client, 'is_test_user', False)) == scope_is_test:
             targets.append(room.client)
             
-        if room.current_handler and room.current_handler.id != sender_id:
+        if room.current_handler and room.current_handler.id != sender_id and bool(getattr(room.current_handler, 'is_test_user', False)) == scope_is_test:
             targets.append(room.current_handler)
             
         # Also check Queue staff if no handler?
         # Maybe not for now, to avoid spamming the generic queue user.
         
         # Also check RoomParticipant for group chats (if any)
-        participants = RoomParticipant.objects.filter(room=room, is_active=True).select_related('user')
+        participants = RoomParticipant.objects.filter(
+            room=room,
+            is_active=True,
+            user__is_test_user=scope_is_test,
+        ).select_related('user')
         for p in participants:
             if p.user.id != sender_id and p.user not in targets:
                 targets.append(p.user)

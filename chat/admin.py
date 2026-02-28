@@ -4,8 +4,8 @@ from .models import Room, Message, RoomParticipant, SupportRoom
 
 @admin.register(Room)
 class RoomAdmin(admin.ModelAdmin):
-    list_display = ['name', 'current_handler', 'status', 'created_at']
-    list_filter = ['status', 'created_at']
+    list_display = ['name', 'current_handler', 'status', 'is_test_room', 'created_at']
+    list_filter = ['status', 'is_test_room', 'created_at']
     search_fields = ['name', 'current_handler__username']
 
 
@@ -30,6 +30,6 @@ class RoomParticipantAdmin(admin.ModelAdmin):
 
 @admin.register(SupportRoom)
 class SupportRoomAdmin(admin.ModelAdmin):
-    list_display = ['name', 'staff', 'is_active']
-    list_filter = ['is_active']
+    list_display = ['name', 'staff', 'is_active', 'is_test_room']
+    list_filter = ['is_active', 'is_test_room']
     search_fields = ['name', 'staff__username']

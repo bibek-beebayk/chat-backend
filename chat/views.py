@@ -20,6 +20,12 @@ from asgiref.sync import async_to_sync
 
 User = get_user_model()
 
+def _is_test_actor(user):
+    return bool(getattr(user, 'is_test_user', False))
+
+def _room_scope_match(room, user):
+    return bool(room.is_test_room) == _is_test_actor(user)
+
 
 class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -28,6 +34,9 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SupportRoom.objects.all()
     serializer_class = SupportRoomSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SupportRoom.objects.filter(is_test_room=_is_test_actor(self.request.user))
     
     @action(detail=True, methods=['post'])
     def enter(self, request, pk=None):
@@ -36,6 +45,8 @@ class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
         
         if user.user_type != 'staff':
             return Response({'error': 'Only staff can enter support rooms'}, status=status.HTTP_403_FORBIDDEN)
+        if room.is_test_room != _is_test_actor(user):
+            return Response({'error': 'Not authorized for this support room scope'}, status=status.HTTP_403_FORBIDDEN)
             
         if room.staff and room.staff != user:
             # Maybe allow "hijacking" or just joining? 
@@ -82,12 +93,16 @@ def room_list_view(request):
     if user.user_type == 'staff':
         # Get staff's active support roomS to filter chats
         # Changed: fetch all active rooms
-        active_support_rooms = user.active_support_rooms.all()
+        active_support_rooms = user.active_support_rooms.filter(is_test_room=_is_test_actor(user))
         if not active_support_rooms.exists():
             return Response([], status=status.HTTP_200_OK)
 
         # Filter by QUEUE (Load Balancer) - ANY of the active queues
-        base_query = Room.objects.filter(status='OPEN', queue__in=active_support_rooms)
+        base_query = Room.objects.filter(
+            status='OPEN',
+            queue__in=active_support_rooms,
+            is_test_room=_is_test_actor(user),
+        )
             
         rooms = base_query.annotate(
             unread_count=Count(
@@ -100,8 +115,13 @@ def room_list_view(request):
         # Players and Agents get their single unique room
         room, created = Room.objects.get_or_create(
             client=user,
-            defaults={'status': 'OPEN'}
+            defaults={'status': 'OPEN', 'is_test_room': _is_test_actor(user)}
         )
+        if room.is_test_room != _is_test_actor(user):
+            room.is_test_room = _is_test_actor(user)
+            room.queue = None
+            room.current_handler = None
+            room.save()
         
         # Load Balancing / Routing Logic
         # Check if queue needs assignment OR Re-assignment (Dynamic Re-routing)
@@ -121,7 +141,10 @@ def room_list_view(request):
              
         if needs_routing:
             # Find candidate rooms
-            candidates = SupportRoom.objects.filter(is_active=True)
+            candidates = SupportRoom.objects.filter(
+                is_active=True,
+                is_test_room=_is_test_actor(user),
+            )
             
             # Filter by requested type first if specified
             if requested_type:
@@ -130,7 +153,10 @@ def room_list_view(request):
                 # For now let's try to find them. If none, maybe fallback to default logic.
                 if not candidates.exists():
                      # Fallback to standard logic if requested type unavailable
-                     candidates = SupportRoom.objects.filter(is_active=True)
+                     candidates = SupportRoom.objects.filter(
+                         is_active=True,
+                         is_test_room=_is_test_actor(user),
+                     )
                      if user.user_type == 'player':
                         candidates = candidates.filter(room_type__in=['player', 'all'])
                      elif user.user_type == 'agent':
@@ -154,6 +180,7 @@ def room_list_view(request):
                         room.current_handler = None
                         
                     room.queue = new_queue
+                    room.is_test_room = new_queue.is_test_room
                     room.save()
                     
                     # Optional: Add system message about switch context
@@ -185,6 +212,8 @@ def room_detail_view(request, room_id):
     Get detailed information about a specific room.
     """
     room = get_object_or_404(Room, id=room_id)
+    if not _room_scope_match(room, request.user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
@@ -210,6 +239,8 @@ def room_messages_view(request, room_id):
     Get message history for a room.
     """
     room = get_object_or_404(Room, id=room_id)
+    if not _room_scope_match(room, request.user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
@@ -292,6 +323,8 @@ def pinned_messages_view(request, room_id):
     Get (all) pinned messages for a room.
     """
     room = get_object_or_404(Room, id=room_id)
+    if not _room_scope_match(room, request.user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     # Permission check (same as room_messages_view)
     if request.user.user_type != 'staff' and room.client != request.user:
@@ -318,6 +351,8 @@ def upload_attachment_view(request, room_id):
     """
     room = get_object_or_404(Room, id=room_id)
     user = request.user
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     # Permission check
     if user.user_type != 'staff' and room.client != user:
@@ -471,6 +506,8 @@ def join_room_view(request, room_id):
     """
     room = get_object_or_404(Room, id=room_id)
     user = request.user
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     # Permission check
     if user.user_type != 'staff' and room.client != user:
@@ -511,6 +548,8 @@ def close_room_view(request, room_id):
     """
     room = get_object_or_404(Room, id=room_id)
     user = request.user
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
     if user.user_type != 'staff':
          return Response({'error': 'Only staff can close rooms'}, status=status.HTTP_403_FORBIDDEN)
@@ -542,13 +581,13 @@ def staff_dashboard_view(request):
         )
     
     # Determine scope based on available support room
-    active_support_rooms = user.active_support_rooms.all()
+    active_support_rooms = user.active_support_rooms.filter(is_test_room=_is_test_actor(user))
     room_types = [room.room_type for room in active_support_rooms]
 
     if not active_support_rooms.exists():
         room_types = []
 
-    base_query = Room.objects.filter(status='OPEN')
+    base_query = Room.objects.filter(status='OPEN', is_test_room=_is_test_actor(user))
     
     if room_types:
         # Filter where room type matches ANY of the active room types
@@ -596,6 +635,8 @@ def switch_station_view(request):
         room = Room.objects.get(client=user)
     except Room.DoesNotExist:
         return Response({'error': 'No active chat room found'}, status=status.HTTP_404_NOT_FOUND)
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
 
     current_queue = room.queue
     if not current_queue:
@@ -606,6 +647,7 @@ def switch_station_view(request):
     alternatives = SupportRoom.objects.filter(
         room_type=current_queue.room_type,
         is_active=True,
+        is_test_room=_is_test_actor(user),
         staff__isnull=False
     ).exclude(id=current_queue.id)
 
@@ -619,6 +661,7 @@ def switch_station_view(request):
 
     # Re-assign
     room.queue = new_queue
+    room.is_test_room = new_queue.is_test_room
     # clear current handler if any, so new staff sees it as fresh? 
     # Or keep it? Usually if switching station, you want a new handler.
     room.current_handler = None 
