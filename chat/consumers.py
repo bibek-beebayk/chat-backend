@@ -143,6 +143,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
                         'user_id': self.user.id
                     }
                  )
+
+            elif message_type == 'chat_read':
+                raw_ids = data.get('message_ids', [])
+                message_ids = []
+                if isinstance(raw_ids, list):
+                    for item in raw_ids:
+                        try:
+                            message_ids.append(int(item))
+                        except (TypeError, ValueError):
+                            continue
+
+                if message_ids:
+                    read_ids = await self.mark_messages_read(message_ids)
+                    if read_ids:
+                        await self.channel_layer.group_send(
+                            self.room_group_name,
+                            {
+                                'type': 'chat_message_read',
+                                'message_ids': read_ids,
+                                'reader_id': self.user.id,
+                            }
+                        )
             
         except json.JSONDecodeError:
             pass
@@ -283,6 +305,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'reply_to': reply_to_message.id if reply_to_message else None,
             'reply_to_message': reply_payload,
         }
+
+    @database_sync_to_async
+    def mark_messages_read(self, message_ids):
+        room = Room.objects.get(id=self.room_id)
+        # Reader should never mark their own messages as read.
+        qs = Message.objects.filter(
+            id__in=message_ids,
+            room=room,
+            is_read=False,
+        ).exclude(sender=self.user)
+        ids = list(qs.values_list('id', flat=True))
+        if ids:
+            qs.update(is_read=True)
+        return ids
     
     @database_sync_to_async
     def join_room(self):
