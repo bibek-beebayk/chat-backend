@@ -82,10 +82,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             
             if message_type == 'chat_message':
                 content = data.get('message', '')
+                reply_to_raw = data.get('reply_to')
+                try:
+                    reply_to_id = int(reply_to_raw) if reply_to_raw is not None else None
+                except (TypeError, ValueError):
+                    reply_to_id = None
                 
                 if content.strip():
                     # Save message to database
-                    message = await self.save_message(content)
+                    message = await self.save_message(content, reply_to_id=reply_to_id)
                     
                     # Send message to room group
                     await self.channel_layer.group_send(
@@ -96,8 +101,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'username': self.user.username,
                             'user_id': self.user.id,
                             'user_type': self.user.user_type,
-                            'message_id': message.id,
-                            'timestamp': message.timestamp.isoformat(),
+                            'message_id': message['id'],
+                            'timestamp': message['timestamp'],
+                            'reply_to': message.get('reply_to'),
+                            'reply_to_message': message.get('reply_to_message'),
                         }
                     )
 
@@ -111,7 +118,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                                     'type': 'new_message_notification',
                                     'room_id': self.room_id,
                                     'room_name': f"Chat {self.room_id}", # Or fetch name in helper if needed, simplified for speed
-                                    'message_id': message.id,
+                                    'message_id': message['id'],
                                     'sender_username': self.user.username
                                 }
                             )
@@ -140,6 +147,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message_id': event['message_id'],
             'timestamp': event['timestamp'],
             'attachment': event.get('attachment'),
+            'reply_to': event.get('reply_to'),
+            'reply_to_message': event.get('reply_to_message'),
         }))
     
     async def user_join(self, event):
@@ -217,15 +226,40 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return room.client_id == self.user.id
     
     @database_sync_to_async
-    def save_message(self, content):
+    def save_message(self, content, reply_to_id=None):
         """Save message to database."""
         room = Room.objects.get(id=self.room_id)
+        reply_to_message = None
+        if reply_to_id:
+            reply_to_message = Message.objects.filter(
+                id=reply_to_id,
+                room=room,
+            ).first()
         message = Message.objects.create(
             room=room,
             sender=self.user,
-            content=content
+            content=content,
+            reply_to=reply_to_message,
         )
-        return message
+        reply_payload = None
+        if reply_to_message:
+            reply_payload = {
+                'id': reply_to_message.id,
+                'content': reply_to_message.content,
+                'sender_username': reply_to_message.sender.username,
+                'sender': {
+                    'id': reply_to_message.sender.id,
+                    'username': reply_to_message.sender.username,
+                    'user_type': reply_to_message.sender.user_type,
+                },
+            }
+
+        return {
+            'id': message.id,
+            'timestamp': message.timestamp.isoformat(),
+            'reply_to': reply_to_message.id if reply_to_message else None,
+            'reply_to_message': reply_payload,
+        }
     
     @database_sync_to_async
     def join_room(self):

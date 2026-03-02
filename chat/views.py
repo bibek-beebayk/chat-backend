@@ -374,12 +374,21 @@ def upload_attachment_view(request, room_id):
     # Create Message with attachment
     # Content is optional if we have an attachment. We leave it empty if not provided.
     content = request.data.get('content', '')
+    reply_to_id_raw = request.data.get('reply_to')
+    reply_to_message = None
+    if reply_to_id_raw is not None and str(reply_to_id_raw).strip() != '':
+        try:
+            reply_to_id = int(reply_to_id_raw)
+            reply_to_message = Message.objects.filter(id=reply_to_id, room=room).first()
+        except (TypeError, ValueError):
+            reply_to_message = None
     
     message = Message.objects.create(
         room=room,
         sender=user,
         content=content,
-        attachment=file_obj
+        attachment=file_obj,
+        reply_to=reply_to_message,
     )
 
     # Broadcast via WebSocket
@@ -397,7 +406,9 @@ def upload_attachment_view(request, room_id):
             'user_id': user.id,
             'message_id': message.id,
             'timestamp': message.timestamp.isoformat(),
-            'attachment': msg_data['attachment'] 
+            'attachment': msg_data['attachment'],
+            'reply_to': msg_data.get('reply_to'),
+            'reply_to_message': msg_data.get('reply_to_message'),
         }
     )
 

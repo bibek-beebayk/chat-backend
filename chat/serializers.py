@@ -18,11 +18,42 @@ class SupportRoomSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     """Serializer for Message model."""
     sender = UserSerializer(read_only=True)
+    reply_to_message = serializers.SerializerMethodField()
     
     class Meta:
         model = Message
-        fields = ['id', 'room', 'sender', 'content', 'attachment', 'timestamp', 'is_read', 'is_edited', 'edited_at', 'is_pinned', 'is_deleted']
+        fields = [
+            'id',
+            'room',
+            'sender',
+            'content',
+            'attachment',
+            'reply_to',
+            'reply_to_message',
+            'timestamp',
+            'is_read',
+            'is_edited',
+            'edited_at',
+            'is_pinned',
+            'is_deleted',
+        ]
         read_only_fields = ['id', 'timestamp']
+
+    def get_reply_to_message(self, obj):
+        if not obj.reply_to_id or not obj.reply_to:
+            return None
+
+        return {
+            'id': obj.reply_to.id,
+            'content': obj.reply_to.content,
+            'sender_username': obj.reply_to.sender.username,
+            'sender': {
+                'id': obj.reply_to.sender.id,
+                'username': obj.reply_to.sender.username,
+                'user_type': obj.reply_to.sender.user_type,
+            },
+            'attachment': obj.reply_to.attachment.url if obj.reply_to.attachment else None,
+        }
 
 
 class RoomParticipantSerializer(serializers.ModelSerializer):

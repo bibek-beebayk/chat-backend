@@ -103,6 +103,13 @@ class Message(models.Model):
     )
     content = models.TextField()
     attachment = models.FileField(upload_to='chat_attachments/', null=True, blank=True)
+    reply_to = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='replies',
+    )
     timestamp = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
     
