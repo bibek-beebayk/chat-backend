@@ -82,6 +82,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
             
             if message_type == 'chat_message':
                 content = data.get('message', '')
+                client_temp_id_raw = data.get('client_temp_id')
+                try:
+                    client_temp_id = int(client_temp_id_raw) if client_temp_id_raw is not None else None
+                except (TypeError, ValueError):
+                    client_temp_id = None
                 reply_to_raw = data.get('reply_to')
                 try:
                     reply_to_id = int(reply_to_raw) if reply_to_raw is not None else None
@@ -90,7 +95,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 
                 if content.strip():
                     # Save message to database
-                    message = await self.save_message(content, reply_to_id=reply_to_id)
+                    message = await self.save_message(
+                        content,
+                        reply_to_id=reply_to_id,
+                        client_temp_id=client_temp_id,
+                    )
                     
                     # Send message to room group
                     await self.channel_layer.group_send(
@@ -103,6 +112,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'user_type': self.user.user_type,
                             'message_id': message['id'],
                             'timestamp': message['timestamp'],
+                            'is_read': message.get('is_read', False),
+                            'client_temp_id': message.get('client_temp_id'),
                             'reply_to': message.get('reply_to'),
                             'reply_to_message': message.get('reply_to_message'),
                         }
@@ -146,6 +157,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'user_type': event.get('user_type', 'client'),
             'message_id': event['message_id'],
             'timestamp': event['timestamp'],
+            'is_read': event.get('is_read', False),
+            'client_temp_id': event.get('client_temp_id'),
             'attachment': event.get('attachment'),
             'reply_to': event.get('reply_to'),
             'reply_to_message': event.get('reply_to_message'),
@@ -200,6 +213,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message_id': event['id'],
             'is_pinned': event['is_pinned']
         }))
+
+    async def chat_message_read(self, event):
+        """Send read receipt update."""
+        await self.send(text_data=json.dumps({
+            'type': 'chat_message_read',
+            'message_ids': event.get('message_ids', []),
+            'reader_id': event.get('reader_id'),
+        }))
     
     @database_sync_to_async
     def check_room_exists(self):
@@ -226,7 +247,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return room.client_id == self.user.id
     
     @database_sync_to_async
-    def save_message(self, content, reply_to_id=None):
+    def save_message(self, content, reply_to_id=None, client_temp_id=None):
         """Save message to database."""
         room = Room.objects.get(id=self.room_id)
         reply_to_message = None
@@ -257,6 +278,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         return {
             'id': message.id,
             'timestamp': message.timestamp.isoformat(),
+            'is_read': message.is_read,
+            'client_temp_id': client_temp_id,
             'reply_to': reply_to_message.id if reply_to_message else None,
             'reply_to_message': reply_payload,
         }

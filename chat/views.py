@@ -255,8 +255,21 @@ def room_messages_view(request, room_id):
         if room.queue and room.queue not in active_support_rooms:
             return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Mark unread messages as read
-    Message.objects.filter(room=room, is_read=False).exclude(sender=request.user).update(is_read=True)
+    # Mark unread messages as read and broadcast read receipts.
+    unread_qs = Message.objects.filter(room=room, is_read=False).exclude(sender=request.user)
+    read_message_ids = list(unread_qs.values_list('id', flat=True))
+    if read_message_ids:
+        unread_qs.update(is_read=True)
+        channel_layer = get_channel_layer()
+        room_group_name = f'chat_{room_id}'
+        async_to_sync(channel_layer.group_send)(
+            room_group_name,
+            {
+                'type': 'chat_message_read',
+                'message_ids': read_message_ids,
+                'reader_id': request.user.id,
+            }
+        )
 
     # Infinite Scroll / Pagination Logic
     before_id = request.query_params.get('before_id')
@@ -406,6 +419,7 @@ def upload_attachment_view(request, room_id):
             'user_id': user.id,
             'message_id': message.id,
             'timestamp': message.timestamp.isoformat(),
+            'is_read': message.is_read,
             'attachment': msg_data['attachment'],
             'reply_to': msg_data.get('reply_to'),
             'reply_to_message': msg_data.get('reply_to_message'),
