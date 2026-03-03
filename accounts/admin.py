@@ -1,13 +1,36 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils import timezone
-from .models import User, EmailVerificationOTP, VerificationRequest, AppVersion
+from .models import (
+    User,
+    EmailVerificationOTP,
+    VerificationRequest,
+    AppVersion,
+    HomeInfoSection,
+    HomeInfoPoint,
+)
 
 @admin.register(AppVersion)
 class AppVersionAdmin(admin.ModelAdmin):
     list_display = ['version_code', 'is_active', 'is_mandatory', 'created_at']
     list_filter = ['is_active', 'is_mandatory']
     search_fields = ['version_code']
+
+
+class HomeInfoPointInline(admin.TabularInline):
+    model = HomeInfoPoint
+    extra = 1
+    fields = ['sort_order', 'icon', 'content']
+    ordering = ['sort_order', 'id']
+
+
+@admin.register(HomeInfoSection)
+class HomeInfoSectionAdmin(admin.ModelAdmin):
+    list_display = ['user_type', 'title', 'is_active', 'updated_at']
+    list_filter = ['user_type', 'is_active']
+    search_fields = ['title', 'subtitle', 'points__content', 'points__icon']
+    ordering = ['user_type']
+    inlines = [HomeInfoPointInline]
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):

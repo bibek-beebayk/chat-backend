@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from .models import HomeInfoSection, HomeInfoPoint
 
 User = get_user_model()
 
@@ -138,3 +139,28 @@ class ResetPasswordCompleteSerializer(serializers.Serializer):
         if data['new_password'] != data['confirm_new_password']:
             raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
         return data
+
+
+class HomeInfoSectionSerializer(serializers.ModelSerializer):
+    points = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HomeInfoSection
+        fields = [
+            'user_type',
+            'title',
+            'subtitle',
+            'points',
+            'is_active',
+            'updated_at',
+        ]
+
+    def get_points(self, obj):
+        points = obj.points.all().order_by('sort_order', 'id')
+        return [
+            {
+                'icon': point.icon,
+                'content': point.content,
+            }
+            for point in points
+        ]

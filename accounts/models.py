@@ -289,3 +289,59 @@ class AppVersion(models.Model):
             # We must commit it but prevent recursion or query errors if new
             AppVersion.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)
         super().save(*args, **kwargs)
+
+
+class HomeInfoSection(models.Model):
+    """
+    Role-specific home information content for mobile app users.
+    Managed from Django admin and fetched by the app.
+    """
+    USER_TYPE_CHOICES = [
+        ('player', 'Player'),
+        ('agent', 'Agent'),
+    ]
+
+    user_type = models.CharField(
+        max_length=10,
+        choices=USER_TYPE_CHOICES,
+        unique=True,
+        help_text='Which user type should see this section.',
+    )
+    title = models.CharField(max_length=120)
+    subtitle = models.CharField(max_length=240, blank=True)
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['user_type']
+        verbose_name = 'Home Info Section'
+        verbose_name_plural = 'Home Info Sections'
+
+    def __str__(self):
+        return f"{self.get_user_type_display()} Home Info"
+
+
+class HomeInfoPoint(models.Model):
+    """
+    Individual point entries for a HomeInfoSection.
+    """
+    section = models.ForeignKey(
+        HomeInfoSection,
+        on_delete=models.CASCADE,
+        related_name='points',
+    )
+    icon = models.CharField(
+        max_length=80,
+        default='info_outline',
+        help_text='Material icon name, e.g. verified_user_outlined',
+    )
+    content = models.CharField(max_length=240)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ['sort_order', 'id']
+        verbose_name = 'Home Info Point'
+        verbose_name_plural = 'Home Info Points'
+
+    def __str__(self):
+        return f"{self.section.user_type}: {self.content[:40]}"

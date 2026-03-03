@@ -6,8 +6,14 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
-from .serializers import RegisterSerializer, UserSerializer, VerifyOTPSerializer, VerifyUserIDSerializer
-from .models import EmailVerificationOTP, VerificationRequest
+from .serializers import (
+    RegisterSerializer,
+    UserSerializer,
+    VerifyOTPSerializer,
+    VerifyUserIDSerializer,
+    HomeInfoSectionSerializer,
+)
+from .models import EmailVerificationOTP, VerificationRequest, HomeInfoSection
 from chat_project.utils import send_zeptomail, search_player
 
 User = get_user_model()
@@ -123,6 +129,29 @@ def current_user_view(request):
     return Response(
         UserSerializer(request.user).data,
         status=status.HTTP_200_OK
+    )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def home_info_view(request):
+    """
+    Return role-specific home info content for player/agent users.
+    """
+    user_type = getattr(request.user, 'user_type', None)
+    if user_type not in ('player', 'agent'):
+        return Response({}, status=status.HTTP_200_OK)
+
+    section = HomeInfoSection.objects.filter(
+        user_type=user_type,
+        is_active=True,
+    ).first()
+    if not section:
+        return Response({}, status=status.HTTP_200_OK)
+
+    return Response(
+        HomeInfoSectionSerializer(section).data,
+        status=status.HTTP_200_OK,
     )
 
 
