@@ -15,6 +15,7 @@ class UserAdmin(admin.ModelAdmin):
     list_filter = ['user_type', 'is_test_user', 'is_active', 'is_verified', 'is_staff']
     search_fields = ['username', 'email', 'external_user_id']
     # readonly_fields = ['external_user_id']
+    ordering = ['-date_joined']
 
     def save_model(self, request, obj, form, change):
         if obj.pk:
