@@ -309,6 +309,7 @@ class HomeInfoSection(models.Model):
     )
     title = models.CharField(max_length=120)
     subtitle = models.CharField(max_length=240, blank=True)
+    footer = models.CharField(max_length=320, blank=True)
     is_active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 

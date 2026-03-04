@@ -28,7 +28,7 @@ class HomeInfoPointInline(admin.TabularInline):
 class HomeInfoSectionAdmin(admin.ModelAdmin):
     list_display = ['user_type', 'title', 'is_active', 'updated_at']
     list_filter = ['user_type', 'is_active']
-    search_fields = ['title', 'subtitle', 'points__content', 'points__icon']
+    search_fields = ['title', 'subtitle', 'footer', 'points__content', 'points__icon']
     ordering = ['user_type']
     inlines = [HomeInfoPointInline]
 

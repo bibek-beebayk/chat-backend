@@ -150,6 +150,7 @@ class HomeInfoSectionSerializer(serializers.ModelSerializer):
             'user_type',
             'title',
             'subtitle',
+            'footer',
             'points',
             'is_active',
             'updated_at',
