@@ -6,6 +6,12 @@ class Post(models.Model):
     """
     Model for posts in the feed (Text, Image, Video).
     """
+    VISIBILITY_CHOICES = [
+        ('all', 'All Users'),
+        ('player', 'Players/Agents'),
+        ('staff', 'Staff/Admin'),
+    ]
+
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -16,6 +22,12 @@ class Post(models.Model):
     image = models.ImageField(upload_to='post_images/', blank=True, null=True)
     video = models.FileField(upload_to='post_videos/', blank=True, null=True)
     link = models.URLField(blank=True, null=True, help_text="Optional link to external content")
+    visibility = models.CharField(
+        max_length=10,
+        choices=VISIBILITY_CHOICES,
+        default='all',
+        help_text='Who can view this post.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
