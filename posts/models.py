@@ -28,6 +28,10 @@ class Post(models.Model):
         default='all',
         help_text='Who can view this post.',
     )
+    is_pinned = models.BooleanField(
+        default=False,
+        help_text='Whether this post should appear in pinned posts feed.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)

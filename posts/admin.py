@@ -3,8 +3,8 @@ from .models import Post
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    list_display = ('title', 'author', 'visibility', 'link', 'created_at', 'is_active')
-    list_filter = ('visibility', 'is_active', 'created_at')
+    list_display = ('title', 'author', 'visibility', 'is_pinned', 'link', 'created_at', 'is_active')
+    list_filter = ('visibility', 'is_pinned', 'is_active', 'created_at')
     search_fields = ('title', 'content')
     readonly_fields = ('created_at', 'updated_at', 'author')
     

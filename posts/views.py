@@ -13,7 +13,7 @@ class PostViewSet(viewsets.ReadOnlyModelViewSet):
         user = self.request.user
         user_type = getattr(user, 'user_type', None)
 
-        base_queryset = Post.objects.filter(is_active=True)
+        base_queryset = Post.objects.filter(is_active=True, is_pinned=True)
 
         # Staff users can see all active posts.
         if user_type == 'staff':
