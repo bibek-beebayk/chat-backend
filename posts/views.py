@@ -15,9 +15,12 @@ class PostViewSet(viewsets.ReadOnlyModelViewSet):
 
         base_queryset = Post.objects.filter(is_active=True)
 
-        # Staff/admin users: staff + all
+        # Staff users can see all active posts.
         if user_type == 'staff':
-            return base_queryset.filter(visibility__in=['all', 'staff']).order_by('-created_at')
+            return base_queryset.order_by('-created_at')
 
-        # Player/agent users: player + all
-        return base_queryset.filter(visibility__in=['all', 'player']).order_by('-created_at')
+        if user_type == 'agent':
+            return base_queryset.filter(visibility__in=['all', 'agents']).order_by('-created_at')
+
+        # Player users: players + all
+        return base_queryset.filter(visibility__in=['all', 'players']).order_by('-created_at')

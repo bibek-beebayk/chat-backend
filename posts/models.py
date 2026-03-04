@@ -7,9 +7,9 @@ class Post(models.Model):
     Model for posts in the feed (Text, Image, Video).
     """
     VISIBILITY_CHOICES = [
-        ('all', 'All Users'),
-        ('player', 'Players/Agents'),
-        ('staff', 'Staff/Admin'),
+        ('all', 'All'),
+        ('players', 'Players'),
+        ('agents', 'Agents'),
     ]
 
     author = models.ForeignKey(
