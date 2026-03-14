@@ -148,3 +148,7 @@ LOGGING = {
         },
     },
 }
+
+# Blog frontend ISR revalidation webhook (optional).
+BLOG_FRONTEND_REVALIDATE_URL = os.environ.get('BLOG_FRONTEND_REVALIDATE_URL', '')
+BLOG_FRONTEND_REVALIDATE_TOKEN = os.environ.get('BLOG_FRONTEND_REVALIDATE_TOKEN', '')
