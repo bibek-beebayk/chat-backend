@@ -11,6 +11,7 @@ from analytics.admin import dashboard_view
 urlpatterns = [
     path('admin/', dashboard_view), # Override default admin index
     path('admin/', admin.site.urls), # Standard handling for other paths
+    path('ckeditor/', include('ckeditor_uploader.urls')),
     path('api/auth/', include('accounts.urls')),
     path('api/', include('chat.urls')),
     path('api/posts/', include('posts.urls')),

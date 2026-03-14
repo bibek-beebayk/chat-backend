@@ -22,6 +22,7 @@ INSTALLED_APPS = [
     'posts',
     'blog',
     'ckeditor',
+    'ckeditor_uploader',
     'rest_framework_simplejwt.token_blacklist',
     'events',
     'notifications',
@@ -91,6 +92,9 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+CKEDITOR_UPLOAD_PATH = 'uploads/'
+CKEDITOR_RESTRICT_BY_USER = False
+CKEDITOR_ALLOW_NONIMAGE_FILES = False
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

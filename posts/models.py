@@ -1,6 +1,6 @@
 from django.db import models
 from django.conf import settings
-from ckeditor.fields import RichTextField
+from ckeditor_uploader.fields import RichTextUploadingField
 
 class Post(models.Model):
     """
@@ -18,7 +18,7 @@ class Post(models.Model):
         related_name='posts'
     )
     title = models.CharField(max_length=200)
-    content = RichTextField(blank=True)
+    content = RichTextUploadingField(blank=True)
     image = models.ImageField(upload_to='post_images/', blank=True, null=True)
     video = models.FileField(upload_to='post_videos/', blank=True, null=True)
     link = models.URLField(blank=True, null=True, help_text="Optional link to external content")

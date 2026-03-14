@@ -2,7 +2,7 @@ from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
 from django.utils import timezone
-from ckeditor.fields import RichTextField
+from ckeditor_uploader.fields import RichTextUploadingField
 
 
 class Blog(models.Model):
@@ -21,7 +21,7 @@ class Blog(models.Model):
     excerpt = models.CharField(max_length=320, blank=True)
     meta_title = models.CharField(max_length=220, blank=True)
     meta_description = models.CharField(max_length=320, blank=True)
-    content = RichTextField(blank=True)
+    content = RichTextUploadingField(blank=True)
     cover_image = models.ImageField(upload_to='blog_covers/', blank=True, null=True)
     og_image = models.ImageField(upload_to='blog_og/', blank=True, null=True)
     is_published = models.BooleanField(default=True)
