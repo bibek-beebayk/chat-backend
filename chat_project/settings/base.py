@@ -20,6 +20,7 @@ INSTALLED_APPS = [
     'accounts',
     'chat',
     'posts',
+    'blog',
     'ckeditor',
     'rest_framework_simplejwt.token_blacklist',
     'events',
