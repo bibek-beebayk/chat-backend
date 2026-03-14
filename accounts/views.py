@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import Q
+from django.db import transaction
 from .serializers import (
     RegisterSerializer,
     UserSerializer,
@@ -184,6 +185,35 @@ def change_password_view(request):
         )
         
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_account_view(request):
+    """
+    Permanently delete the authenticated user's account and related data.
+    """
+    user = request.user
+
+    # Safety guard to prevent accidental deletion of Django superuser accounts.
+    if user.is_superuser:
+        return Response(
+            {'error': 'Superuser account cannot be deleted from this endpoint.'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    try:
+        with transaction.atomic():
+            user.delete()
+        return Response(
+            {'message': 'Account deleted successfully.'},
+            status=status.HTTP_200_OK
+        )
+    except Exception:
+        return Response(
+            {'error': 'Failed to delete account. Please try again.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])
