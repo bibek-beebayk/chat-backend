@@ -95,7 +95,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 CKEDITOR_UPLOAD_PATH = 'uploads/'
 CKEDITOR_RESTRICT_BY_USER = False
 CKEDITOR_ALLOW_NONIMAGE_FILES = False
-if os.environ.get('AWS_STORAGE_BUCKET_NAME') and os.environ.get('AWS_S3_ENDPOINT_URL'):
+if (
+    os.environ.get('AWS_STORAGE_BUCKET_NAME')
+    and os.environ.get('AWS_S3_ENDPOINT_URL')
+    and os.environ.get('CKEDITOR_PUBLIC_UPLOADS', 'false').lower() == 'true'
+):
     CKEDITOR_STORAGE_BACKEND = 'chat_project.storage_backends.CKEditorPublicStorage'
 
 # Default primary key field type

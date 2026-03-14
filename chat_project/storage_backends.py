@@ -5,7 +5,7 @@ class CKEditorPublicStorage(S3Storage):
     """
     Storage backend for CKEditor uploads with stable public URLs.
     """
-    location = 'uploads'
+    location = ''
     default_acl = None
     file_overwrite = False
     querystring_auth = False
