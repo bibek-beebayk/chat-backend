@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Blog
+from .models import Blog, BlogComment
 
 
 class BlogSerializer(serializers.ModelSerializer):
@@ -19,6 +19,26 @@ class BlogSerializer(serializers.ModelSerializer):
             'og_image',
             'author_username',
             'published_at',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class BlogCommentSerializer(serializers.ModelSerializer):
+    can_delete = serializers.SerializerMethodField()
+
+    def get_can_delete(self, obj):
+        visitor_hash = self.context.get('visitor_hash')
+        return bool(visitor_hash and obj.visitor_hash == visitor_hash)
+
+    class Meta:
+        model = BlogComment
+        fields = [
+            'id',
+            'display_name',
+            'content',
+            'can_delete',
             'created_at',
             'updated_at',
         ]

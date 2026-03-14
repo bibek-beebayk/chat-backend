@@ -47,3 +47,43 @@ class Blog(models.Model):
         if self.is_published and self.published_at is None:
             self.published_at = timezone.now()
         super().save(*args, **kwargs)
+
+
+class BlogReaction(models.Model):
+    REACTION_LIKE = 'like'
+    REACTION_CHOICES = [
+        (REACTION_LIKE, 'Like'),
+    ]
+
+    blog = models.ForeignKey(Blog, on_delete=models.CASCADE, related_name='reactions')
+    visitor_hash = models.CharField(max_length=64, db_index=True)
+    reaction_type = models.CharField(max_length=16, choices=REACTION_CHOICES, default=REACTION_LIKE)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['blog', 'visitor_hash'], name='unique_blog_reaction_per_visitor')
+        ]
+
+    def __str__(self):
+        return f'{self.blog_id}:{self.reaction_type}'
+
+
+class BlogComment(models.Model):
+    blog = models.ForeignKey(Blog, on_delete=models.CASCADE, related_name='comments')
+    visitor_hash = models.CharField(max_length=64, db_index=True)
+    display_name = models.CharField(max_length=80, default='Guest')
+    content = models.TextField()
+    is_hidden = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['blog', 'visitor_hash'], name='unique_blog_comment_per_visitor')
+        ]
+
+    def __str__(self):
+        return f'{self.blog_id}:{self.display_name}'
