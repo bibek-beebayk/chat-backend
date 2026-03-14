@@ -70,14 +70,16 @@ CORS_ALLOWED_ORIGINS = [
     "https://chat-backend-staging.up.railway.app",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
-    "http://192.168.1.67:3000"
+    "http://192.168.1.67:3000",
+    "https://blog.hrlzone.com"
 ]
 CSRF_TRUSTED_ORIGINS = [
     "https://chat-frontend-nu-five.vercel.app", 
     "https://chat-backend-staging.up.railway.app",
     "http://127.0.0.1:3000",
     "http://localhost:3000",
-    "http://192.168.1.67:3000"
+    "http://192.168.1.67:3000",
+    "https://blog.hrlzone.com"
 ]
 
 # Static Files (Whitenoise) & Media Files (Cloudflare R2)
