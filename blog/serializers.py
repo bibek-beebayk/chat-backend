@@ -1,9 +1,14 @@
 from rest_framework import serializers
 from .models import Blog, BlogComment
+from chat_project.content_utils import normalize_signed_media_urls
 
 
 class BlogSerializer(serializers.ModelSerializer):
     author_username = serializers.CharField(source='author.username', read_only=True)
+    content = serializers.SerializerMethodField()
+
+    def get_content(self, obj):
+        return normalize_signed_media_urls(obj.content or '')
 
     class Meta:
         model = Blog
