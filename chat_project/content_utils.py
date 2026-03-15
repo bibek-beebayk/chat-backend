@@ -56,10 +56,6 @@ def normalize_signed_media_urls(content: str) -> str:
             except Exception:
                 pass
 
-        if has_signature:
-            clean_url = urlunsplit((parts.scheme, parts.netloc, parts.path, '', parts.fragment))
-            return f"{match.group('prefix')}{clean_url}{match.group('suffix')}"
-
         return match.group(0)
 
     return _URL_ATTR_PATTERN.sub(_replace, content)
