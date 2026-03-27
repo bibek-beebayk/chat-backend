@@ -260,13 +260,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
 
         if self.user.user_type == 'staff':
+            if room.room_type == 'direct_agent':
+                return False
             return (
                 room.current_handler_id == self.user.id
                 or (room.queue_id is not None and self.user.active_support_rooms.filter(id=room.queue_id).exists())
                 or room.participants.filter(user=self.user, is_active=True).exists()
             )
-
-        return room.client_id == self.user.id
+        if room.room_type == 'support':
+            return room.client_id == self.user.id
+        if room.room_type == 'direct_agent':
+            return room.participants.filter(user=self.user, is_active=True).exists()
+        return False
     
     @database_sync_to_async
     def save_message(self, content, reply_to_id=None, client_temp_id=None):

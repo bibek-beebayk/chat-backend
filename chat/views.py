@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Count, Max
 from django.db.models.functions import Coalesce
+from django.db import transaction
 from .models import Room, Message, RoomParticipant, SupportRoom
 from .serializers import (
     RoomSerializer,
@@ -25,6 +26,24 @@ def _is_test_actor(user):
 
 def _room_scope_match(room, user):
     return bool(room.is_test_room) == _is_test_actor(user)
+
+
+def _can_non_staff_access_room(room, user):
+    if room.room_type == 'support':
+        return room.client_id == user.id
+    if room.room_type == 'direct_agent':
+        return room.participants.filter(user=user, is_active=True).exists()
+    return False
+
+
+def _can_staff_access_room(room, user):
+    if room.room_type == 'direct_agent':
+        return False
+    return (
+        room.current_handler_id == user.id
+        or (room.queue_id is not None and user.active_support_rooms.filter(id=room.queue_id).exists())
+        or room.participants.filter(user=user, is_active=True).exists()
+    )
 
 
 class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
@@ -100,6 +119,7 @@ def room_list_view(request):
         # Filter by QUEUE (Load Balancer) - ANY of the active queues
         base_query = Room.objects.filter(
             status='OPEN',
+            room_type='support',
             queue__in=active_support_rooms,
             is_test_room=_is_test_actor(user),
         )
@@ -112,96 +132,94 @@ def room_list_view(request):
             last_activity=Coalesce(Max('messages__timestamp'), 'created_at')
         ).order_by('-status', '-unread_count', '-last_activity')
     else:
-        # Players and Agents get their single unique room
-        room, created = Room.objects.get_or_create(
+        rooms = []
+        support_room, created = Room.objects.get_or_create(
             client=user,
+            room_type='support',
             defaults={'status': 'OPEN', 'is_test_room': _is_test_actor(user)}
         )
-        if room.is_test_room != _is_test_actor(user):
-            room.is_test_room = _is_test_actor(user)
-            room.queue = None
-            room.current_handler = None
-            room.save()
-        
-        # Load Balancing / Routing Logic
-        # Check if queue needs assignment OR Re-assignment (Dynamic Re-routing)
+        if support_room.is_test_room != _is_test_actor(user):
+            support_room.is_test_room = _is_test_actor(user)
+            support_room.queue = None
+            support_room.current_handler = None
+            support_room.save()
+
         needs_routing = False
-        
-        # Check if a specific room type is requested (e.g. 'event')
         requested_type = request.query_params.get('room_type')
-        
-        if not room.queue:
+        if not support_room.queue:
             needs_routing = True
-        elif not room.queue.is_active:
-             # Queue is inactive (staff left), re-route to an active one!
-             needs_routing = True
-        elif requested_type and room.queue.room_type != requested_type:
-             # Context switch requested (e.g. from Player Support to Event Support)
-             needs_routing = True
-             
+        elif not support_room.queue.is_active:
+            needs_routing = True
+        elif requested_type and support_room.queue.room_type != requested_type:
+            needs_routing = True
+
         if needs_routing:
-            # Find candidate rooms
             candidates = SupportRoom.objects.filter(
                 is_active=True,
                 is_test_room=_is_test_actor(user),
             )
-            
-            # Filter by requested type first if specified
             if requested_type:
                 candidates = candidates.filter(room_type=requested_type)
-                # If no active candidates of requested type, fallback?
-                # For now let's try to find them. If none, maybe fallback to default logic.
                 if not candidates.exists():
-                     # Fallback to standard logic if requested type unavailable
-                     candidates = SupportRoom.objects.filter(
-                         is_active=True,
-                         is_test_room=_is_test_actor(user),
-                     )
-                     if user.user_type == 'player':
+                    candidates = SupportRoom.objects.filter(
+                        is_active=True,
+                        is_test_room=_is_test_actor(user),
+                    )
+                    if user.user_type == 'player':
                         candidates = candidates.filter(room_type__in=['player', 'all'])
-                     elif user.user_type == 'agent':
+                    elif user.user_type == 'agent':
                         candidates = candidates.filter(room_type__in=['agent', 'all'])
             else:
                 if user.user_type == 'player':
                     candidates = candidates.filter(room_type__in=['player', 'all'])
                 elif user.user_type == 'agent':
                     candidates = candidates.filter(room_type__in=['agent', 'all'])
-            
-            # Annotate with load (OPEN queued chats)
+
             candidates = candidates.annotate(
                 load=Count('queued_chats', filter=Q(queued_chats__status='OPEN'))
             ).order_by('load')
-            
+
             if candidates.exists():
                 new_queue = candidates.first()
-                if room.queue != new_queue:
-                    # If we are switching queues, maybe clear current handler?
-                    if room.queue and room.queue.room_type != new_queue.room_type:
-                        room.current_handler = None
-                        
-                    room.queue = new_queue
-                    room.is_test_room = new_queue.is_test_room
-                    room.save()
-                    
-                    # Optional: Add system message about switch context
+                if support_room.queue != new_queue:
+                    if support_room.queue and support_room.queue.room_type != new_queue.room_type:
+                        support_room.current_handler = None
+                    support_room.queue = new_queue
+                    support_room.is_test_room = new_queue.is_test_room
+                    support_room.save()
                     if requested_type and not created:
-                         Message.objects.create(
-                            room=room,
-                            sender=user, # System-like
+                        Message.objects.create(
+                            room=support_room,
+                            sender=user,
                             content=f"System: Connected to {new_queue.name}",
                             is_read=True
                         )
 
-        # If it was CLOSED, reopen it?
-        if room.status == 'CLOSED':
-            room.status = 'OPEN'
-            room.save()
-            
-        # Manually annotate unread count for serializer compatibility
-        room.unread_count = room.messages.filter(is_read=False).exclude(sender=user).count()
-        rooms = [room]
+        if support_room.status == 'CLOSED':
+            support_room.status = 'OPEN'
+            support_room.save()
+
+        support_room.unread_count = support_room.messages.filter(
+            is_read=False
+        ).exclude(sender=user).count()
+        rooms.append(support_room)
+
+        direct_rooms = Room.objects.filter(
+            room_type='direct_agent',
+            status='OPEN',
+            is_test_room=_is_test_actor(user),
+            participants__user=user,
+            participants__is_active=True,
+        ).distinct().annotate(
+            unread_count=Count(
+                'messages',
+                filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
+            ),
+            last_activity=Coalesce(Max('messages__timestamp'), 'created_at')
+        ).order_by('-unread_count', '-last_activity')
+        rooms.extend(list(direct_rooms))
     
-    serializer = RoomSerializer(rooms, many=True)
+    serializer = RoomSerializer(rooms, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -217,15 +235,12 @@ def room_detail_view(request, room_id):
     
     # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_non_staff_access_room(room, request.user):
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
     # Staff can only see rooms in their active queue
     if request.user.user_type == 'staff':
-        active_support_rooms = request.user.active_support_rooms.all()
-        if not active_support_rooms.exists():
-            return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
-
-        if room.queue and room.queue not in active_support_rooms:
+        if not _can_staff_access_room(room, request.user):
             return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
         
     serializer = RoomDetailSerializer(room, context={'request': request})
@@ -244,15 +259,12 @@ def room_messages_view(request, room_id):
     
     # Permission check
     if request.user.user_type != 'staff' and room.client != request.user:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_non_staff_access_room(room, request.user):
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
     # Staff can only see rooms in their active queue
     if request.user.user_type == 'staff':
-        active_support_rooms = request.user.active_support_rooms.all()
-        if not active_support_rooms.exists():
-            return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
-
-        if room.queue and room.queue not in active_support_rooms:
+        if not _can_staff_access_room(room, request.user):
             return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     # Mark unread messages as read and broadcast read receipts.
@@ -341,14 +353,11 @@ def pinned_messages_view(request, room_id):
     
     # Permission check (same as room_messages_view)
     if request.user.user_type != 'staff' and room.client != request.user:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_non_staff_access_room(room, request.user):
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.user.user_type == 'staff':
-        active_support_rooms = request.user.active_support_rooms.all()
-        if not active_support_rooms.exists():
-             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
-             
-        if room.queue and room.queue not in active_support_rooms:
+        if not _can_staff_access_room(room, request.user):
              return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     messages = Message.objects.filter(room=room, is_pinned=True, is_deleted=False).order_by('timestamp')
@@ -369,15 +378,12 @@ def upload_attachment_view(request, room_id):
     
     # Permission check
     if user.user_type != 'staff' and room.client != user:
-        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_non_staff_access_room(room, user):
+            return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
     # Staff can only upload to rooms in their active queue
     if user.user_type == 'staff':
-        active_support_rooms = user.active_support_rooms.all()
-        if not active_support_rooms.exists():
-             return Response({'error': 'You are not in a support room'}, status=status.HTTP_403_FORBIDDEN)
-
-        if room.queue and room.queue not in active_support_rooms:
+        if not _can_staff_access_room(room, user):
              return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
 
     file_obj = request.FILES.get('file')
@@ -536,12 +542,15 @@ def join_room_view(request, room_id):
     
     # Permission check
     if user.user_type != 'staff' and room.client != user:
-        return Response({'error': 'Not authorized to join this room'}, status=status.HTTP_403_FORBIDDEN)
+        if not _can_non_staff_access_room(room, user):
+            return Response({'error': 'Not authorized to join this room'}, status=status.HTTP_403_FORBIDDEN)
     
     # If staff joins:
     if user.user_type == 'staff':
+        if not _can_staff_access_room(room, user):
+            return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
         # If open but no current handler, claim it
-        if not room.current_handler:
+        if room.room_type == 'support' and not room.current_handler:
             room.current_handler = user
             room.save()
         # If already handled by someone else, we just join as a participant (viewing/assisting)
@@ -657,7 +666,7 @@ def switch_station_view(request):
 
     # Get user's room
     try:
-        room = Room.objects.get(client=user)
+        room = Room.objects.get(client=user, room_type='support')
     except Room.DoesNotExist:
         return Response({'error': 'No active chat room found'}, status=status.HTTP_404_NOT_FOUND)
     if not _room_scope_match(room, user):
@@ -705,6 +714,103 @@ def switch_station_view(request):
         'new_station': new_queue.name,
         'message': f"You have been moved to {new_queue.name}"
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def agent_search_view(request):
+    user = request.user
+    if user.user_type != 'player':
+        return Response({'error': 'Only players can search agents'}, status=status.HTTP_403_FORBIDDEN)
+
+    query = (request.query_params.get('q') or '').strip()
+    qs = User.objects.filter(
+        user_type='agent',
+        is_active=True,
+        is_test_user=_is_test_actor(user),
+    )
+    if query:
+        qs = qs.filter(
+            Q(username__icontains=query) |
+            Q(first_name__icontains=query) |
+            Q(last_name__icontains=query)
+        )
+    qs = qs.order_by('username')[:30]
+
+    data = [
+        {
+            'id': agent.id,
+            'username': agent.username,
+            'first_name': agent.first_name,
+            'last_name': agent.last_name,
+            'is_verified': agent.is_verified,
+            'user_type': agent.user_type,
+        }
+        for agent in qs
+    ]
+    return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def start_direct_agent_chat_view(request):
+    player = request.user
+    if player.user_type != 'player':
+        return Response({'error': 'Only players can start direct agent chat'}, status=status.HTTP_403_FORBIDDEN)
+
+    agent_id = request.data.get('agent_id')
+    try:
+        agent_id = int(agent_id)
+    except (TypeError, ValueError):
+        return Response({'error': 'agent_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        agent = User.objects.get(
+            id=agent_id,
+            user_type='agent',
+            is_active=True,
+            is_test_user=_is_test_actor(player),
+        )
+    except User.DoesNotExist:
+        return Response({'error': 'Agent not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    with transaction.atomic():
+        room, created = Room.objects.get_or_create(
+            room_type='direct_agent',
+            direct_player=player,
+            direct_agent=agent,
+            defaults={
+                'status': 'OPEN',
+                'is_test_room': _is_test_actor(player),
+                'name': f'direct_{player.username}_{agent.username}',
+            },
+        )
+        if room.status == 'CLOSED':
+            room.status = 'OPEN'
+            room.save(update_fields=['status'])
+
+        player_participant, _ = RoomParticipant.objects.get_or_create(
+            room=room,
+            user=player,
+            defaults={'is_active': True},
+        )
+        if not player_participant.is_active:
+            player_participant.is_active = True
+            player_participant.save(update_fields=['is_active'])
+
+        agent_participant, _ = RoomParticipant.objects.get_or_create(
+            room=room,
+            user=agent,
+            defaults={'is_active': True},
+        )
+        if not agent_participant.is_active:
+            agent_participant.is_active = True
+            agent_participant.save(update_fields=['is_active'])
+
+    room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
+    payload = RoomSerializer(room, context={'request': request}).data
+    payload['created'] = created
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

@@ -79,16 +79,20 @@ class RoomSerializer(serializers.ModelSerializer):
     queue_name = serializers.CharField(source='queue.name', read_only=True)
     queue_type = serializers.CharField(source='queue.room_type', read_only=True)
     can_switch_station = serializers.SerializerMethodField()
+    room_type = serializers.CharField(read_only=True)
+    counterpart = serializers.SerializerMethodField()
     
     class Meta:
         model = Room
-        fields = ['id', 'name', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue', 'queue_name', 'queue_type', 'can_switch_station']
+        fields = ['id', 'name', 'room_type', 'counterpart', 'current_handler', 'client', 'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online', 'queue', 'queue_name', 'queue_type', 'can_switch_station']
         read_only_fields = ['id', 'created_at']
     
     def get_participant_count(self, obj):
         return obj.participants.filter(is_active=True).count()
 
     def get_is_staff_online(self, obj):
+        if obj.room_type == 'direct_agent':
+            return False
         # Logic: Check if ANY staff is online for this room type.
         try:
             from .models import SupportRoom
@@ -117,6 +121,8 @@ class RoomSerializer(serializers.ModelSerializer):
             return False
 
     def get_can_switch_station(self, obj):
+        if obj.room_type != 'support':
+            return False
         if not obj.queue:
             return False
             
@@ -127,6 +133,22 @@ class RoomSerializer(serializers.ModelSerializer):
             is_active=True,
             staff__isnull=False
         ).exclude(id=obj.queue.id).exists()
+
+    def get_counterpart(self, obj):
+        if obj.room_type != 'direct_agent':
+            return None
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return None
+        target = None
+        if obj.direct_player_id == user.id:
+            target = obj.direct_agent
+        elif obj.direct_agent_id == user.id:
+            target = obj.direct_player
+        if target is None:
+            return None
+        return UserSerializer(target).data
 
 
 class RoomDetailSerializer(serializers.ModelSerializer):

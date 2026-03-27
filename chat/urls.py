@@ -7,7 +7,9 @@ router = DefaultRouter()
 router.register(r'support-rooms', views.SupportRoomViewSet)
 
 urlpatterns = [
+    path('agents/search/', views.agent_search_view, name='agent-search'),
     path('rooms/', views.room_list_view, name='room-list'),
+    path('rooms/direct/start/', views.start_direct_agent_chat_view, name='direct-agent-chat-start'),
     path('rooms/<int:room_id>/', views.room_detail_view, name='room-detail'),
     path('rooms/<int:room_id>/messages/', views.room_messages_view, name='room-messages'),
     path('rooms/<int:room_id>/join/', views.join_room_view, name='join-room'),

@@ -4,9 +4,9 @@ from .models import Room, Message, RoomParticipant, SupportRoom
 
 @admin.register(Room)
 class RoomAdmin(admin.ModelAdmin):
-    list_display = ['name', 'current_handler', 'status', 'is_test_room', 'created_at']
-    list_filter = ['status', 'is_test_room', 'created_at']
-    search_fields = ['name', 'current_handler__username']
+    list_display = ['name', 'room_type', 'client', 'direct_player', 'direct_agent', 'current_handler', 'status', 'is_test_room', 'created_at']
+    list_filter = ['room_type', 'status', 'is_test_room', 'created_at']
+    search_fields = ['name', 'current_handler__username', 'client__username', 'direct_player__username', 'direct_agent__username']
 
 
 @admin.register(Message)

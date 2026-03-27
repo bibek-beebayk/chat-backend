@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.db.models import Q
 
 
 class SupportRoom(models.Model):
@@ -39,7 +40,13 @@ class Room(models.Model):
     """
     Chat room model. Each room is assigned to one staff member.
     """
+    ROOM_TYPE_CHOICES = (
+        ('support', 'Support'),
+        ('direct_agent', 'Direct Agent'),
+    )
+
     name = models.CharField(max_length=100, blank=True)
+    room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='support')
     client = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -47,6 +54,22 @@ class Room(models.Model):
         limit_choices_to={'user_type__in': ['player', 'agent']},
         null=True,
         blank=True
+    )
+    direct_player = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='direct_agent_rooms',
+        limit_choices_to={'user_type': 'player'},
+        null=True,
+        blank=True,
+    )
+    direct_agent = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='direct_player_rooms',
+        limit_choices_to={'user_type': 'agent'},
+        null=True,
+        blank=True,
     )
     current_handler = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -71,20 +94,42 @@ class Room(models.Model):
     status = models.CharField(max_length=10, choices=(('OPEN', 'Open'), ('CLOSED', 'Closed')), default='OPEN')
     
     def __str__(self):
+        if self.room_type == 'direct_agent':
+            p = self.direct_player.username if self.direct_player else "Unknown player"
+            a = self.direct_agent.username if self.direct_agent else "Unknown agent"
+            return f"Direct chat {p} ↔ {a}"
         client_name = self.client.username if self.client else "Unknown"
-        return f"Chat with {client_name}"
+        return f"Support chat with {client_name}"
     
     def save(self, *args, **kwargs):
-        if not self.name and self.client:
-            self.name = f"chat_{self.client.username}"
-        if self.client:
-            self.is_test_room = bool(self.client.is_test_user)
-        elif self.queue:
-            self.is_test_room = bool(self.queue.is_test_room)
+        if self.room_type == 'direct_agent':
+            if not self.name and self.direct_player and self.direct_agent:
+                self.name = f"direct_{self.direct_player.username}_{self.direct_agent.username}"
+            if self.direct_player:
+                self.is_test_room = bool(self.direct_player.is_test_user)
+            elif self.direct_agent:
+                self.is_test_room = bool(self.direct_agent.is_test_user)
+            self.client = None
+            self.queue = None
+            self.current_handler = None
+        else:
+            if not self.name and self.client:
+                self.name = f"chat_{self.client.username}"
+            if self.client:
+                self.is_test_room = bool(self.client.is_test_user)
+            elif self.queue:
+                self.is_test_room = bool(self.queue.is_test_room)
         super().save(*args, **kwargs)
     
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['direct_player', 'direct_agent'],
+                condition=Q(room_type='direct_agent'),
+                name='unique_player_agent_direct_room',
+            ),
+        ]
 
 
 class Message(models.Model):
