@@ -9,10 +9,24 @@ class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model."""
     
     verification_status = serializers.SerializerMethodField()
+    profile_picture = serializers.SerializerMethodField()
+    avatar = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'user_type', 'is_verified', 'is_test_user', 'email', 'first_name', 'last_name', 'verification_status']
+        fields = [
+            'id',
+            'username',
+            'user_type',
+            'is_verified',
+            'is_test_user',
+            'email',
+            'first_name',
+            'last_name',
+            'verification_status',
+            'profile_picture',
+            'avatar',
+        ]
         read_only_fields = ['id']
 
     def get_verification_status(self, obj):
@@ -22,6 +36,17 @@ class UserSerializer(serializers.ModelSerializer):
             return latest_request.status
         except VerificationRequest.DoesNotExist:
             return None
+
+    def get_profile_picture(self, obj):
+        if not obj.profile_picture:
+            return None
+        request = self.context.get('request')
+        url = obj.profile_picture.url
+        return request.build_absolute_uri(url) if request else url
+
+    def get_avatar(self, obj):
+        # Backward-compatible alias used by older app clients.
+        return self.get_profile_picture(obj)
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -102,6 +127,10 @@ class ChangePasswordSerializer(serializers.Serializer):
         return data
 
 
+class CurrentPasswordSerializer(serializers.Serializer):
+    current_password = serializers.CharField(required=True, trim_whitespace=False)
+
+
 class ForgotPasswordInitiateSerializer(serializers.Serializer):
     """Serializer for initiating password reset."""
     email = serializers.EmailField(required=False)
@@ -127,6 +156,31 @@ class ForgotPasswordInitiateSerializer(serializers.Serializer):
 class VerifyResetOTPSerializer(VerifyOTPSerializer):
     """Serializer for verifying reset OTP (reuses VerifyOTPSerializer structure)."""
     pass
+
+
+class ProfilePictureUpdateSerializer(serializers.Serializer):
+    profile_picture = serializers.ImageField(required=True)
+
+
+class EmailChangeRequestSerializer(serializers.Serializer):
+    new_email = serializers.EmailField(required=True)
+    current_password = serializers.CharField(required=True, trim_whitespace=False)
+
+    def validate_new_email(self, value):
+        return value.strip().lower()
+
+
+class EmailChangeVerifySerializer(serializers.Serializer):
+    new_email = serializers.EmailField(required=True)
+    otp_code = serializers.CharField(required=True, min_length=6, max_length=6)
+
+    def validate_new_email(self, value):
+        return value.strip().lower()
+
+    def validate_otp_code(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError("OTP code must contain only digits.")
+        return value
 
 
 class ResetPasswordCompleteSerializer(serializers.Serializer):

@@ -13,8 +13,17 @@ from .serializers import (
     VerifyOTPSerializer,
     VerifyUserIDSerializer,
     HomeInfoSectionSerializer,
+    ProfilePictureUpdateSerializer,
+    EmailChangeRequestSerializer,
+    EmailChangeVerifySerializer,
+    CurrentPasswordSerializer,
 )
-from .models import EmailVerificationOTP, VerificationRequest, HomeInfoSection
+from .models import (
+    EmailVerificationOTP,
+    EmailChangeOTP,
+    VerificationRequest,
+    HomeInfoSection,
+)
 from chat_project.utils import send_zeptomail, search_player
 
 User = get_user_model()
@@ -128,7 +137,7 @@ def current_user_view(request):
     Get current authenticated user.
     """
     return Response(
-        UserSerializer(request.user).data,
+        UserSerializer(request.user, context={'request': request}).data,
         status=status.HTTP_200_OK
     )
 
@@ -152,6 +161,168 @@ def home_info_view(request):
 
     return Response(
         HomeInfoSectionSerializer(section).data,
+        status=status.HTTP_200_OK,
+    )
+
+
+def _send_email_change_otp(user, new_email, otp_code):
+    subject = 'Confirm Your Email Change - OTP Code'
+    message = f"""
+    <html>
+        <body>
+            <p>Hello {user.username},</p>
+            <p>Use the following OTP to confirm your new email address:</p>
+            <h2 style="color: #4F46E5;">{otp_code}</h2>
+            <p>This code will expire in 30 minutes.</p>
+            <p>If you did not request this change, ignore this email.</p>
+        </body>
+    </html>
+    """
+    send_zeptomail(new_email, subject, message)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_profile_picture_view(request):
+    serializer = ProfilePictureUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    request.user.profile_picture = serializer.validated_data['profile_picture']
+    request.user.save(update_fields=['profile_picture'])
+    return Response(
+        {
+            'message': 'Profile picture updated successfully.',
+            'user': UserSerializer(request.user, context={'request': request}).data,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def request_email_change_view(request):
+    serializer = EmailChangeRequestSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user = request.user
+    new_email = serializer.validated_data['new_email']
+    current_password = serializer.validated_data['current_password']
+    current_email = (user.email or '').strip().lower()
+
+    if not user.check_password(current_password):
+        return Response(
+            {'error': 'Current password is incorrect.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if new_email == current_email:
+        return Response(
+            {'error': 'New email must be different from current email.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    email_taken = User.objects.filter(email__iexact=new_email).exclude(id=user.id).exists()
+    if email_taken:
+        return Response(
+            {'error': 'The email is already in use. Please use a different one.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    EmailChangeOTP.objects.filter(user=user, new_email__iexact=new_email, is_used=False).update(is_used=True)
+    otp_code = EmailChangeOTP.generate_otp()
+    EmailChangeOTP.objects.create(
+        user=user,
+        new_email=new_email,
+        otp_code=otp_code,
+    )
+
+    try:
+        _send_email_change_otp(user, new_email, otp_code)
+    except Exception:
+        return Response(
+            {'error': 'Failed to send OTP email. Please try again.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(
+        {'message': 'OTP sent to new email address.', 'new_email': new_email},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_email_change_view(request):
+    serializer = EmailChangeVerifySerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user = request.user
+    new_email = serializer.validated_data['new_email']
+    otp_code = serializer.validated_data['otp_code']
+
+    email_taken = User.objects.filter(email__iexact=new_email).exclude(id=user.id).exists()
+    if email_taken:
+        return Response(
+            {'error': 'The email is already in use. Please use a different one.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        otp_record = EmailChangeOTP.objects.filter(
+            user=user,
+            new_email__iexact=new_email,
+            is_used=False,
+        ).latest('created_at')
+    except EmailChangeOTP.DoesNotExist:
+        return Response(
+            {'error': 'Invalid OTP code.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not otp_record.is_valid():
+        if otp_record.is_used:
+            return Response(
+                {'error': 'This OTP code has already been used.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if otp_record.attempts >= 3:
+            return Response(
+                {'error': 'Maximum verification attempts exceeded. Please request a new OTP.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if timezone.now() > otp_record.expires_at:
+            return Response(
+                {'error': 'This OTP code has expired. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    if otp_record.otp_code != otp_code:
+        otp_record.increment_attempts()
+        remaining_attempts = 3 - otp_record.attempts
+        return Response(
+            {'error': f'Invalid OTP code. {remaining_attempts} attempts remaining.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        user.email = new_email
+        user.save(update_fields=['email'])
+        otp_record.is_used = True
+        otp_record.save(update_fields=['is_used'])
+        EmailChangeOTP.objects.filter(
+            user=user,
+            new_email__iexact=new_email,
+            is_used=False,
+        ).exclude(id=otp_record.id).update(is_used=True)
+
+    return Response(
+        {
+            'message': 'Email changed successfully.',
+            'user': UserSerializer(user, context={'request': request}).data,
+        },
         status=status.HTTP_200_OK,
     )
 
@@ -185,6 +356,26 @@ def change_password_view(request):
         )
         
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_current_password_view(request):
+    serializer = CurrentPasswordSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    current_password = serializer.validated_data['current_password']
+    if not request.user.check_password(current_password):
+        return Response(
+            {'error': 'Current password is incorrect.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    return Response(
+        {'message': 'Password verified.'},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['DELETE'])

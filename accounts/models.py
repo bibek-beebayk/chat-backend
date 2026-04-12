@@ -43,6 +43,12 @@ class User(AbstractUser):
         unique=True,
         help_text="External user ID from another service for verification"
     )
+    profile_picture = models.ImageField(
+        upload_to='profile_pictures/',
+        blank=True,
+        null=True,
+        help_text='Optional user profile picture'
+    )
     
     def __str__(self):
         return f"{self.username} ({self.get_user_type_display()})"
@@ -96,6 +102,51 @@ class EmailVerificationOTP(models.Model):
     @staticmethod
     def generate_otp():
         """Generate a random 6-digit OTP code"""
+        return ''.join(random.choices(string.digits, k=6))
+
+
+class EmailChangeOTP(models.Model):
+    """
+    Model to store OTP codes for authenticated email change verification.
+    """
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='email_change_otps'
+    )
+    new_email = models.EmailField()
+    otp_code = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    is_used = models.BooleanField(default=False)
+    attempts = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Email Change OTP'
+        verbose_name_plural = 'Email Change OTPs'
+
+    def __str__(self):
+        return f"Email change OTP for {self.user.email} -> {self.new_email}"
+
+    def save(self, *args, **kwargs):
+        if not self.expires_at:
+            self.expires_at = timezone.now() + timedelta(minutes=30)
+        super().save(*args, **kwargs)
+
+    def is_valid(self):
+        return (
+            not self.is_used and
+            self.attempts < 3 and
+            timezone.now() < self.expires_at
+        )
+
+    def increment_attempts(self):
+        self.attempts += 1
+        self.save(update_fields=['attempts'])
+
+    @staticmethod
+    def generate_otp():
         return ''.join(random.choices(string.digits, k=6))
 
 

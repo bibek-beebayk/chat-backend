@@ -4,6 +4,7 @@ from django.utils import timezone
 from .models import (
     User,
     EmailVerificationOTP,
+    EmailChangeOTP,
     VerificationRequest,
     AppVersion,
     HomeInfoSection,
@@ -55,6 +56,15 @@ class EmailVerificationOTPAdmin(admin.ModelAdmin):
     list_display = ['user', 'otp_code', 'created_at', 'expires_at', 'is_used', 'attempts']
     list_filter = ['is_used', 'created_at']
     search_fields = ['user__username', 'user__email', 'otp_code']
+    readonly_fields = ['created_at', 'expires_at']
+    ordering = ['-created_at']
+
+
+@admin.register(EmailChangeOTP)
+class EmailChangeOTPAdmin(admin.ModelAdmin):
+    list_display = ['user', 'new_email', 'otp_code', 'created_at', 'expires_at', 'is_used', 'attempts']
+    list_filter = ['is_used', 'created_at']
+    search_fields = ['user__username', 'user__email', 'new_email', 'otp_code']
     readonly_fields = ['created_at', 'expires_at']
     ordering = ['-created_at']
 
