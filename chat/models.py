@@ -92,6 +92,15 @@ class Room(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=10, choices=(('OPEN', 'Open'), ('CLOSED', 'Closed')), default='OPEN')
+    resolution_reason = models.CharField(max_length=240, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='resolved_rooms',
+    )
     
     def __str__(self):
         if self.room_type == 'direct_agent':
@@ -194,3 +203,52 @@ class RoomParticipant(models.Model):
     
     def __str__(self):
         return f"{self.user.username} in {self.room.name}"
+
+
+class AgentQuickReply(models.Model):
+    """
+    Saved quick replies for agents/staff to respond faster.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='agent_quick_replies',
+    )
+    title = models.CharField(max_length=80)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['title', '-updated_at']
+        unique_together = ('user', 'title')
+
+    def __str__(self):
+        return f"{self.user.username}: {self.title}"
+
+
+class ChatInternalNote(models.Model):
+    """
+    Private chat note for agent/staff collaboration.
+    Not shown to players/agents on client side unless authorized.
+    """
+    room = models.OneToOneField(
+        Room,
+        on_delete=models.CASCADE,
+        related_name='internal_note',
+    )
+    content = models.TextField(blank=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chat_notes_updated',
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"Internal note for room {self.room_id}"

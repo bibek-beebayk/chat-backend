@@ -7,13 +7,22 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q, Count, Max, Case, When, Value, IntegerField, Subquery, OuterRef
 from django.db.models.functions import Coalesce
 from django.db import transaction
-from .models import Room, Message, RoomParticipant, SupportRoom
+from .models import (
+    Room,
+    Message,
+    RoomParticipant,
+    SupportRoom,
+    AgentQuickReply,
+    ChatInternalNote,
+)
 from .serializers import (
     RoomSerializer,
     RoomDetailSerializer,
     MessageSerializer,
     RoomParticipantSerializer,
-    SupportRoomSerializer
+    SupportRoomSerializer,
+    AgentQuickReplySerializer,
+    ChatInternalNoteSerializer,
 )
 from django.contrib.auth import get_user_model
 from channels.layers import get_channel_layer
@@ -44,6 +53,12 @@ def _can_staff_access_room(room, user):
         or (room.queue_id is not None and user.active_support_rooms.filter(id=room.queue_id).exists())
         or room.participants.filter(user=user, is_active=True).exists()
     )
+
+
+def _can_user_access_room(room, user):
+    if user.user_type == 'staff':
+        return _can_staff_access_room(room, user)
+    return _can_non_staff_access_room(room, user)
 
 
 class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
@@ -599,8 +614,14 @@ def close_room_view(request, room_id):
     if not _room_scope_match(room, user):
         return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
     
-    if user.user_type != 'staff':
-         return Response({'error': 'Only staff can close rooms'}, status=status.HTTP_403_FORBIDDEN)
+    if user.user_type not in ('staff', 'agent'):
+         return Response({'error': 'Only staff or agents can close rooms'}, status=status.HTTP_403_FORBIDDEN)
+
+    if user.user_type == 'agent':
+        if room.room_type != 'direct_agent' or room.direct_agent_id != user.id:
+            return Response({'error': 'Agents can close only their direct chats'}, status=status.HTTP_403_FORBIDDEN)
+    if user.user_type == 'staff' and not _can_staff_access_room(room, user):
+        return Response({'error': 'Room not in your queues'}, status=status.HTTP_403_FORBIDDEN)
          
     # Optional: Enforce only current handler can close?
     # if room.current_handler != user:
@@ -608,9 +629,99 @@ def close_room_view(request, room_id):
         
     room.status = 'CLOSED'
     room.current_handler = None # Clear handler on close logic
-    room.save()
+    room.resolution_reason = (request.data.get('resolution_reason') or '').strip()[:240]
+    room.resolved_at = timezone.now()
+    room.resolved_by = user
+    room.save(update_fields=['status', 'current_handler', 'resolution_reason', 'resolved_at', 'resolved_by'])
     
-    return Response({'status': 'closed', 'message': 'Chat resolved'})
+    return Response({
+        'status': 'closed',
+        'message': 'Chat resolved',
+        'resolution_reason': room.resolution_reason,
+    })
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def quick_replies_view(request):
+    user = request.user
+    if user.user_type not in ('agent', 'staff'):
+        return Response({'error': 'Only staff/agents can manage quick replies'}, status=status.HTTP_403_FORBIDDEN)
+
+    if request.method == 'GET':
+        qs = AgentQuickReply.objects.filter(user=user).order_by('title', '-updated_at')
+        return Response(
+            AgentQuickReplySerializer(qs, many=True, context={'request': request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+    serializer = AgentQuickReplySerializer(data=request.data, context={'request': request})
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    reply = AgentQuickReply.objects.create(
+        user=user,
+        title=serializer.validated_data['title'].strip(),
+        content=serializer.validated_data['content'],
+    )
+    return Response(
+        AgentQuickReplySerializer(reply, context={'request': request}).data,
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def quick_reply_detail_view(request, reply_id):
+    user = request.user
+    if user.user_type not in ('agent', 'staff'):
+        return Response({'error': 'Only staff/agents can manage quick replies'}, status=status.HTTP_403_FORBIDDEN)
+
+    reply = get_object_or_404(AgentQuickReply, id=reply_id, user=user)
+
+    if request.method == 'DELETE':
+        reply.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    title = (request.data.get('title') or '').strip()
+    content = request.data.get('content')
+    if title:
+        reply.title = title[:80]
+    if content is not None:
+        reply.content = content
+    reply.save()
+    return Response(
+        AgentQuickReplySerializer(reply, context={'request': request}).data,
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['GET', 'PUT', 'PATCH'])
+@permission_classes([IsAuthenticated])
+def room_internal_note_view(request, room_id):
+    user = request.user
+    room = get_object_or_404(Room, id=room_id)
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
+    if user.user_type not in ('staff', 'agent'):
+        return Response({'error': 'Only staff/agents can access internal notes'}, status=status.HTTP_403_FORBIDDEN)
+    if not _can_user_access_room(room, user):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    note, _ = ChatInternalNote.objects.get_or_create(room=room)
+    if request.method == 'GET':
+        return Response(
+            ChatInternalNoteSerializer(note, context={'request': request}).data,
+            status=status.HTTP_200_OK,
+        )
+
+    content = (request.data.get('content') or '').strip()
+    note.content = content
+    note.updated_by = user
+    note.save(update_fields=['content', 'updated_by', 'updated_at'])
+    return Response(
+        ChatInternalNoteSerializer(note, context={'request': request}).data,
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['GET'])

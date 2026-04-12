@@ -1,6 +1,12 @@
 from rest_framework import serializers
-from .models import Room, Message, RoomParticipant
-from .models import Room, Message, RoomParticipant, SupportRoom
+from .models import (
+    Room,
+    Message,
+    RoomParticipant,
+    SupportRoom,
+    AgentQuickReply,
+    ChatInternalNote,
+)
 from accounts.serializers import UserSerializer
 
 
@@ -170,3 +176,19 @@ class RoomDetailSerializer(serializers.ModelSerializer):
     def get_recent_messages(self, obj):
         messages = obj.messages.all()[:50]
         return MessageSerializer(messages, many=True, context=self.context).data
+
+
+class AgentQuickReplySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AgentQuickReply
+        fields = ['id', 'title', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ChatInternalNoteSerializer(serializers.ModelSerializer):
+    updated_by = UserSerializer(read_only=True)
+
+    class Meta:
+        model = ChatInternalNote
+        fields = ['room', 'content', 'updated_by', 'updated_at']
+        read_only_fields = ['updated_by', 'updated_at']
