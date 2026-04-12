@@ -17,6 +17,7 @@ from .serializers import (
     EmailChangeRequestSerializer,
     EmailChangeVerifySerializer,
     CurrentPasswordSerializer,
+    AgentAvailabilityUpdateSerializer,
 )
 from .models import (
     EmailVerificationOTP,
@@ -374,6 +375,33 @@ def verify_current_password_view(request):
 
     return Response(
         {'message': 'Password verified.'},
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def update_agent_availability_view(request):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response(
+            {'error': 'Only agents can update availability.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    serializer = AgentAvailabilityUpdateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user.agent_availability = serializer.validated_data['agent_availability']
+    user.agent_status_note = serializer.validated_data.get('agent_status_note', '').strip()
+    user.save(update_fields=['agent_availability', 'agent_status_note'])
+
+    return Response(
+        {
+            'message': 'Availability updated successfully.',
+            'user': UserSerializer(user, context={'request': request}).data,
+        },
         status=status.HTTP_200_OK,
     )
 

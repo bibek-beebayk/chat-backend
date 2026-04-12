@@ -26,6 +26,8 @@ class UserSerializer(serializers.ModelSerializer):
             'verification_status',
             'profile_picture',
             'avatar',
+            'agent_availability',
+            'agent_status_note',
         ]
         read_only_fields = ['id']
 
@@ -129,6 +131,18 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class CurrentPasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(required=True, trim_whitespace=False)
+
+
+class AgentAvailabilityUpdateSerializer(serializers.Serializer):
+    agent_availability = serializers.ChoiceField(
+        choices=['online', 'busy', 'away', 'offline'],
+        required=True,
+    )
+    agent_status_note = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=120,
+    )
 
 
 class ForgotPasswordInitiateSerializer(serializers.Serializer):

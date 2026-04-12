@@ -15,6 +15,12 @@ class User(AbstractUser):
         ('agent', 'Agent'),
         ('staff', 'Staff'),
     ]
+    AGENT_AVAILABILITY_CHOICES = [
+        ('online', 'Online'),
+        ('busy', 'Busy'),
+        ('away', 'Away'),
+        ('offline', 'Offline'),
+    ]
 
     email = models.EmailField(
         unique=True,
@@ -48,6 +54,17 @@ class User(AbstractUser):
         blank=True,
         null=True,
         help_text='Optional user profile picture'
+    )
+    agent_availability = models.CharField(
+        max_length=10,
+        choices=AGENT_AVAILABILITY_CHOICES,
+        default='online',
+        help_text='Availability status used for direct player-to-agent chat.',
+    )
+    agent_status_note = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text='Optional short note shown to players (e.g. Back in 10 mins).',
     )
     
     def __str__(self):

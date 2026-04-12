@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Count, Max
+from django.db.models import Q, Count, Max, Case, When, Value, IntegerField, Subquery, OuterRef
 from django.db.models.functions import Coalesce
 from django.db import transaction
 from .models import Room, Message, RoomParticipant, SupportRoom
@@ -110,6 +110,9 @@ def room_list_view(request):
     user = request.user
     
     if user.user_type == 'staff':
+        latest_sender_subquery = Message.objects.filter(
+            room=OuterRef('pk')
+        ).order_by('-timestamp').values('sender_id')[:1]
         # Get staff's active support roomS to filter chats
         # Changed: fetch all active rooms
         active_support_rooms = user.active_support_rooms.filter(is_test_room=_is_test_actor(user))
@@ -129,9 +132,13 @@ def room_list_view(request):
                 'messages',
                 filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
             ),
-            last_activity=Coalesce(Max('messages__timestamp'), 'created_at')
+            last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
+            last_message_sender_id=Subquery(latest_sender_subquery),
         ).order_by('-status', '-unread_count', '-last_activity')
     else:
+        latest_sender_subquery = Message.objects.filter(
+            room=OuterRef('pk')
+        ).order_by('-timestamp').values('sender_id')[:1]
         rooms = []
         support_room, created = Room.objects.get_or_create(
             client=user,
@@ -202,6 +209,12 @@ def room_list_view(request):
         support_room.unread_count = support_room.messages.filter(
             is_read=False
         ).exclude(sender=user).count()
+        support_room.last_activity = support_room.messages.aggregate(
+            max_ts=Max('timestamp')
+        )['max_ts'] or support_room.created_at
+        support_room.last_message_sender_id = support_room.messages.order_by(
+            '-timestamp'
+        ).values_list('sender_id', flat=True).first()
         rooms.append(support_room)
 
         direct_rooms = Room.objects.filter(
@@ -215,7 +228,8 @@ def room_list_view(request):
                 'messages',
                 filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
             ),
-            last_activity=Coalesce(Max('messages__timestamp'), 'created_at')
+            last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
+            last_message_sender_id=Subquery(latest_sender_subquery),
         ).order_by('-unread_count', '-last_activity')
         rooms.extend(list(direct_rooms))
     
@@ -735,7 +749,16 @@ def agent_search_view(request):
             Q(first_name__icontains=query) |
             Q(last_name__icontains=query)
         )
-    qs = qs.order_by('username')[:30]
+    qs = qs.annotate(
+        availability_rank=Case(
+            When(agent_availability='online', then=Value(0)),
+            When(agent_availability='busy', then=Value(1)),
+            When(agent_availability='away', then=Value(2)),
+            When(agent_availability='offline', then=Value(3)),
+            default=Value(4),
+            output_field=IntegerField(),
+        )
+    ).order_by('availability_rank', 'username')[:30]
 
     data = [
         {
@@ -745,6 +768,8 @@ def agent_search_view(request):
             'last_name': agent.last_name,
             'is_verified': agent.is_verified,
             'user_type': agent.user_type,
+            'agent_availability': agent.agent_availability,
+            'agent_status_note': agent.agent_status_note,
         }
         for agent in qs
     ]
@@ -773,6 +798,12 @@ def start_direct_agent_chat_view(request):
         )
     except User.DoesNotExist:
         return Response({'error': 'Agent not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if agent.agent_availability == 'offline':
+        return Response(
+            {'error': 'This agent is currently offline. Please choose another agent.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     with transaction.atomic():
         room, created = Room.objects.get_or_create(
