@@ -10,6 +10,7 @@ urlpatterns = [
     path('agents/search/', views.agent_search_view, name='agent-search'),
     path('groups/discover/', views.discover_groups_view, name='groups-discover'),
     path('groups/', views.create_group_view, name='groups-create'),
+    path('groups/<int:room_id>/', views.delete_group_view, name='groups-delete'),
     path('groups/managed/requests/', views.managed_group_join_requests_view, name='groups-managed-requests'),
     path('groups/join-requests/<int:request_id>/review/', views.review_group_join_request_view, name='groups-join-request-review'),
     path('groups/<int:room_id>/join-requests/', views.request_group_join_view, name='groups-join-request-create'),

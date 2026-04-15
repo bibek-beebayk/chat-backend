@@ -1061,6 +1061,23 @@ def create_group_view(request):
     return Response(payload, status=status.HTTP_201_CREATED)
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_group_view(request, room_id):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response({'error': 'Only agents can delete groups'}, status=status.HTTP_403_FORBIDDEN)
+
+    room = get_object_or_404(Room, id=room_id, room_type='group')
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+    if room.group_admin_id != user.id:
+        return Response({'error': 'Only the group admin can delete this group'}, status=status.HTTP_403_FORBIDDEN)
+
+    room.delete()
+    return Response({'status': 'deleted'}, status=status.HTTP_200_OK)
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def request_group_join_view(request, room_id):
