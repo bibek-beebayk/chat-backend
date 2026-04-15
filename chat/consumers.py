@@ -113,6 +113,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                             'message_id': message['id'],
                             'timestamp': message['timestamp'],
                             'is_read': message.get('is_read', False),
+                            'is_broadcast': message.get('is_broadcast', False),
                             'client_temp_id': message.get('client_temp_id'),
                             'reply_to': message.get('reply_to'),
                             'reply_to_message': message.get('reply_to_message'),
@@ -180,6 +181,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'message_id': event['message_id'],
             'timestamp': event['timestamp'],
             'is_read': event.get('is_read', False),
+            'is_broadcast': event.get('is_broadcast', False),
             'client_temp_id': event.get('client_temp_id'),
             'attachment': event.get('attachment'),
             'reply_to': event.get('reply_to'),
@@ -260,7 +262,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return False
 
         if self.user.user_type == 'staff':
-            if room.room_type == 'direct_agent':
+            if room.room_type in ('direct_agent', 'group'):
                 return False
             return (
                 room.current_handler_id == self.user.id
@@ -270,6 +272,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if room.room_type == 'support':
             return room.client_id == self.user.id
         if room.room_type == 'direct_agent':
+            return room.participants.filter(user=self.user, is_active=True).exists()
+        if room.room_type == 'group':
             return room.participants.filter(user=self.user, is_active=True).exists()
         return False
     
@@ -306,6 +310,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             'id': message.id,
             'timestamp': message.timestamp.isoformat(),
             'is_read': message.is_read,
+            'is_broadcast': message.is_broadcast,
             'client_temp_id': client_temp_id,
             'reply_to': reply_to_message.id if reply_to_message else None,
             'reply_to_message': reply_payload,

@@ -8,6 +8,14 @@ router.register(r'support-rooms', views.SupportRoomViewSet)
 
 urlpatterns = [
     path('agents/search/', views.agent_search_view, name='agent-search'),
+    path('groups/discover/', views.discover_groups_view, name='groups-discover'),
+    path('groups/', views.create_group_view, name='groups-create'),
+    path('groups/managed/requests/', views.managed_group_join_requests_view, name='groups-managed-requests'),
+    path('groups/join-requests/<int:request_id>/review/', views.review_group_join_request_view, name='groups-join-request-review'),
+    path('groups/<int:room_id>/join-requests/', views.request_group_join_view, name='groups-join-request-create'),
+    path('groups/<int:room_id>/members/', views.group_members_view, name='groups-members'),
+    path('groups/<int:room_id>/broadcast/', views.group_broadcast_view, name='groups-broadcast'),
+    path('groups/<int:room_id>/direct/<int:player_id>/start/', views.start_direct_chat_from_group_view, name='groups-direct-start'),
     path('rooms/', views.room_list_view, name='room-list'),
     path('rooms/direct/start/', views.start_direct_agent_chat_view, name='direct-agent-chat-start'),
     path('rooms/<int:room_id>/', views.room_detail_view, name='room-detail'),

@@ -14,6 +14,7 @@ from .models import (
     SupportRoom,
     AgentQuickReply,
     ChatInternalNote,
+    GroupJoinRequest,
 )
 from .serializers import (
     RoomSerializer,
@@ -23,7 +24,9 @@ from .serializers import (
     SupportRoomSerializer,
     AgentQuickReplySerializer,
     ChatInternalNoteSerializer,
+    GroupJoinRequestSerializer,
 )
+from accounts.serializers import UserSerializer
 from django.contrib.auth import get_user_model
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -42,11 +45,13 @@ def _can_non_staff_access_room(room, user):
         return room.client_id == user.id
     if room.room_type == 'direct_agent':
         return room.participants.filter(user=user, is_active=True).exists()
+    if room.room_type == 'group':
+        return room.participants.filter(user=user, is_active=True).exists()
     return False
 
 
 def _can_staff_access_room(room, user):
-    if room.room_type == 'direct_agent':
+    if room.room_type in ('direct_agent', 'group'):
         return False
     return (
         room.current_handler_id == user.id
@@ -247,6 +252,22 @@ def room_list_view(request):
             last_message_sender_id=Subquery(latest_sender_subquery),
         ).order_by('-unread_count', '-last_activity')
         rooms.extend(list(direct_rooms))
+
+        group_rooms = Room.objects.filter(
+            room_type='group',
+            status='OPEN',
+            is_test_room=_is_test_actor(user),
+            participants__user=user,
+            participants__is_active=True,
+        ).distinct().annotate(
+            unread_count=Count(
+                'messages',
+                filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
+            ),
+            last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
+            last_message_sender_id=Subquery(latest_sender_subquery),
+        ).order_by('-unread_count', '-last_activity')
+        rooms.extend(list(group_rooms))
     
     serializer = RoomSerializer(rooms, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
@@ -452,10 +473,12 @@ def upload_attachment_view(request, room_id):
             'message': message.content,
             'username': user.username,
             'user_id': user.id,
+            'user_type': user.user_type,
             'message_id': message.id,
             'timestamp': message.timestamp.isoformat(),
             'is_read': message.is_read,
             'attachment': msg_data['attachment'],
+            'is_broadcast': msg_data.get('is_broadcast', False),
             'reply_to': msg_data.get('reply_to'),
             'reply_to_message': msg_data.get('reply_to_message'),
         }
@@ -529,13 +552,8 @@ def delete_message(request, message_id):
 @permission_classes([IsAuthenticated])
 def pin_message(request, message_id):
     message = get_object_or_404(Message, id=message_id)
-    
-    # Any participant can pin? Or just staff? Let's allow any participant for now.
-    # Check if user is in room
-    is_staff = request.user.user_type == 'staff'
-    is_room_client = message.room.client == request.user
-    
-    if not (is_staff or is_room_client):
+
+    if not _can_user_access_room(message.room, request.user):
         return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
         
     message.is_pinned = not message.is_pinned
@@ -951,6 +969,307 @@ def start_direct_agent_chat_view(request):
 
     room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
     payload = RoomSerializer(room, context={'request': request}).data
+    payload['created'] = created
+    return Response(payload, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def discover_groups_view(request):
+    user = request.user
+    query = (request.query_params.get('q') or '').strip()
+    qs = Room.objects.filter(
+        room_type='group',
+        status='OPEN',
+        is_test_room=_is_test_actor(user),
+    ).select_related('group_admin')
+    if query:
+        qs = qs.filter(Q(name__icontains=query) | Q(group_description__icontains=query))
+
+    requested_map = {
+        item['room_id']: item['status']
+        for item in GroupJoinRequest.objects.filter(
+            player=user,
+            room__in=qs,
+        ).values('room_id', 'status')
+    }
+    joined_ids = set(RoomParticipant.objects.filter(
+        room__in=qs,
+        user=user,
+        is_active=True,
+    ).values_list('room_id', flat=True))
+
+    data = []
+    for room in qs.order_by('-created_at')[:100]:
+        relation = 'none'
+        if room.id in joined_ids:
+            relation = 'member'
+        elif room.group_admin_id == user.id:
+            relation = 'admin'
+        elif requested_map.get(room.id) == 'pending':
+            relation = 'pending'
+        elif requested_map.get(room.id) == 'rejected':
+            relation = 'rejected'
+        data.append({
+            'id': room.id,
+            'name': room.name,
+            'group_description': room.group_description,
+            'group_admin': room.group_admin.username if room.group_admin else None,
+            'member_count': room.participants.filter(is_active=True).count(),
+            'relation': relation,
+        })
+    return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_group_view(request):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response({'error': 'Only agents can create groups'}, status=status.HTTP_403_FORBIDDEN)
+
+    admin_group_count = Room.objects.filter(
+        room_type='group',
+        status='OPEN',
+        group_admin=user,
+        is_test_room=_is_test_actor(user),
+    ).count()
+    if admin_group_count >= 3:
+        return Response({'error': 'You can create at most 3 groups'}, status=status.HTTP_400_BAD_REQUEST)
+
+    name = (request.data.get('name') or '').strip()
+    description = (request.data.get('group_description') or '').strip()
+    if not name:
+        return Response({'error': 'Group name is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        room = Room.objects.create(
+            room_type='group',
+            name=name[:100],
+            group_description=description[:240],
+            group_admin=user,
+            status='OPEN',
+            is_test_room=_is_test_actor(user),
+        )
+        RoomParticipant.objects.get_or_create(
+            room=room,
+            user=user,
+            defaults={'is_active': True},
+        )
+
+    payload = RoomSerializer(room, context={'request': request}).data
+    return Response(payload, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def request_group_join_view(request, room_id):
+    user = request.user
+    if user.user_type != 'player':
+        return Response({'error': 'Only players can request to join groups'}, status=status.HTTP_403_FORBIDDEN)
+
+    room = get_object_or_404(Room, id=room_id, room_type='group', status='OPEN')
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+
+    if RoomParticipant.objects.filter(room=room, user=user, is_active=True).exists():
+        return Response({'error': 'You are already in this group'}, status=status.HTTP_400_BAD_REQUEST)
+
+    join_request, created = GroupJoinRequest.objects.get_or_create(
+        room=room,
+        player=user,
+        status='pending',
+    )
+    if not created and join_request.status == 'pending':
+        return Response({'error': 'Join request already pending'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not created and join_request.status in ('approved', 'rejected'):
+        join_request.status = 'pending'
+        join_request.reviewed_at = None
+        join_request.reviewed_by = None
+        join_request.save(update_fields=['status', 'reviewed_at', 'reviewed_by'])
+
+    return Response({'status': 'requested'}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def managed_group_join_requests_view(request):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response({'error': 'Only agents can view group requests'}, status=status.HTTP_403_FORBIDDEN)
+
+    qs = GroupJoinRequest.objects.filter(
+        room__room_type='group',
+        room__group_admin=user,
+        room__is_test_room=_is_test_actor(user),
+        status='pending',
+    ).select_related('room', 'player')
+
+    serializer = GroupJoinRequestSerializer(qs, many=True, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def review_group_join_request_view(request, request_id):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response({'error': 'Only agents can review join requests'}, status=status.HTTP_403_FORBIDDEN)
+
+    join_request = get_object_or_404(
+        GroupJoinRequest.objects.select_related('room', 'player'),
+        id=request_id,
+        status='pending',
+        room__room_type='group',
+        room__group_admin=user,
+    )
+    if not _room_scope_match(join_request.room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+
+    action = (request.data.get('action') or '').strip().lower()
+    if action not in ('approve', 'reject'):
+        return Response({'error': "action must be 'approve' or 'reject'"}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        join_request.status = 'approved' if action == 'approve' else 'rejected'
+        join_request.reviewed_at = timezone.now()
+        join_request.reviewed_by = user
+        join_request.save(update_fields=['status', 'reviewed_at', 'reviewed_by'])
+
+        if action == 'approve':
+            participant, _ = RoomParticipant.objects.get_or_create(
+                room=join_request.room,
+                user=join_request.player,
+                defaults={'is_active': True},
+            )
+            if not participant.is_active:
+                participant.is_active = True
+                participant.save(update_fields=['is_active'])
+
+    return Response({'status': join_request.status}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def group_members_view(request, room_id):
+    user = request.user
+    room = get_object_or_404(Room, id=room_id, room_type='group')
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+    if not _can_non_staff_access_room(room, user):
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    participants = RoomParticipant.objects.filter(
+        room=room,
+        is_active=True,
+    ).select_related('user').order_by('user__username')
+    data = [UserSerializer(p.user, context={'request': request}).data for p in participants]
+    return Response(data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def group_broadcast_view(request, room_id):
+    user = request.user
+    room = get_object_or_404(Room, id=room_id, room_type='group', status='OPEN')
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+    if room.group_admin_id != user.id:
+        return Response({'error': 'Only the group admin can broadcast'}, status=status.HTTP_403_FORBIDDEN)
+
+    content = (request.data.get('content') or '').strip()
+    if not content:
+        return Response({'error': 'Broadcast message cannot be empty'}, status=status.HTTP_400_BAD_REQUEST)
+
+    message = Message.objects.create(
+        room=room,
+        sender=user,
+        content=content,
+        is_broadcast=True,
+    )
+
+    channel_layer = get_channel_layer()
+    room_group_name = f'chat_{room.id}'
+    async_to_sync(channel_layer.group_send)(
+        room_group_name,
+        {
+            'type': 'chat_message',
+            'message': message.content,
+            'username': user.username,
+            'user_id': user.id,
+            'user_type': user.user_type,
+            'message_id': message.id,
+            'timestamp': message.timestamp.isoformat(),
+            'is_read': message.is_read,
+            'is_broadcast': True,
+        }
+    )
+
+    return Response(MessageSerializer(message, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def start_direct_chat_from_group_view(request, room_id, player_id):
+    user = request.user
+    if user.user_type != 'agent':
+        return Response({'error': 'Only agents can start direct chats from groups'}, status=status.HTTP_403_FORBIDDEN)
+
+    group_room = get_object_or_404(Room, id=room_id, room_type='group', status='OPEN')
+    if group_room.group_admin_id != user.id:
+        return Response({'error': 'Only group admin can start direct chats from this group'}, status=status.HTTP_403_FORBIDDEN)
+    if not _room_scope_match(group_room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
+        player = User.objects.get(
+            id=player_id,
+            user_type='player',
+            is_active=True,
+            is_test_user=_is_test_actor(user),
+        )
+    except User.DoesNotExist:
+        return Response({'error': 'Player not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not RoomParticipant.objects.filter(room=group_room, user=player, is_active=True).exists():
+        return Response({'error': 'Player is not an active member of this group'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        direct_room, created = Room.objects.get_or_create(
+            room_type='direct_agent',
+            direct_player=player,
+            direct_agent=user,
+            defaults={
+                'status': 'OPEN',
+                'is_test_room': _is_test_actor(user),
+                'name': f'direct_{player.username}_{user.username}',
+            },
+        )
+        if direct_room.status == 'CLOSED':
+            direct_room.status = 'OPEN'
+            direct_room.save(update_fields=['status'])
+
+        player_participant, _ = RoomParticipant.objects.get_or_create(
+            room=direct_room,
+            user=player,
+            defaults={'is_active': True},
+        )
+        if not player_participant.is_active:
+            player_participant.is_active = True
+            player_participant.save(update_fields=['is_active'])
+
+        agent_participant, _ = RoomParticipant.objects.get_or_create(
+            room=direct_room,
+            user=user,
+            defaults={'is_active': True},
+        )
+        if not agent_participant.is_active:
+            agent_participant.is_active = True
+            agent_participant.save(update_fields=['is_active'])
+
+    direct_room.unread_count = direct_room.messages.filter(is_read=False).exclude(sender=user).count()
+    payload = RoomSerializer(direct_room, context={'request': request}).data
     payload['created'] = created
     return Response(payload, status=status.HTTP_200_OK)
 

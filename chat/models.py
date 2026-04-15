@@ -43,6 +43,7 @@ class Room(models.Model):
     ROOM_TYPE_CHOICES = (
         ('support', 'Support'),
         ('direct_agent', 'Direct Agent'),
+        ('group', 'Group'),
     )
 
     name = models.CharField(max_length=100, blank=True)
@@ -71,6 +72,15 @@ class Room(models.Model):
         null=True,
         blank=True,
     )
+    group_admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='managed_group_rooms',
+        limit_choices_to={'user_type': 'agent'},
+        null=True,
+        blank=True,
+    )
+    group_description = models.CharField(max_length=240, blank=True)
     current_handler = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -101,15 +111,18 @@ class Room(models.Model):
         blank=True,
         related_name='resolved_rooms',
     )
-    
+
     def __str__(self):
         if self.room_type == 'direct_agent':
             p = self.direct_player.username if self.direct_player else "Unknown player"
             a = self.direct_agent.username if self.direct_agent else "Unknown agent"
-            return f"Direct chat {p} ↔ {a}"
+            return f"Direct chat {p} <-> {a}"
+        if self.room_type == 'group':
+            admin_name = self.group_admin.username if self.group_admin else "Unknown admin"
+            return f"Group {self.name or self.id} (admin: {admin_name})"
         client_name = self.client.username if self.client else "Unknown"
         return f"Support chat with {client_name}"
-    
+
     def save(self, *args, **kwargs):
         if self.room_type == 'direct_agent':
             if not self.name and self.direct_player and self.direct_agent:
@@ -121,6 +134,16 @@ class Room(models.Model):
             self.client = None
             self.queue = None
             self.current_handler = None
+            self.group_admin = None
+            self.group_description = ''
+        elif self.room_type == 'group':
+            if self.group_admin:
+                self.is_test_room = bool(self.group_admin.is_test_user)
+            self.client = None
+            self.queue = None
+            self.current_handler = None
+            self.direct_player = None
+            self.direct_agent = None
         else:
             if not self.name and self.client:
                 self.name = f"chat_{self.client.username}"
@@ -128,8 +151,12 @@ class Room(models.Model):
                 self.is_test_room = bool(self.client.is_test_user)
             elif self.queue:
                 self.is_test_room = bool(self.queue.is_test_room)
+            self.direct_player = None
+            self.direct_agent = None
+            self.group_admin = None
+            self.group_description = ''
         super().save(*args, **kwargs)
-    
+
     class Meta:
         ordering = ['-created_at']
         constraints = [
@@ -166,16 +193,17 @@ class Message(models.Model):
     )
     timestamp = models.DateTimeField(auto_now_add=True)
     is_read = models.BooleanField(default=False)
-    
+
     # Message Modification Fields
     is_edited = models.BooleanField(default=False)
     edited_at = models.DateTimeField(null=True, blank=True)
     is_pinned = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
-    
+    is_broadcast = models.BooleanField(default=False)
+
     def __str__(self):
         return f"{self.sender.username} in {self.room.name}: {self.content[:50]}"
-    
+
     class Meta:
         ordering = ['timestamp']
 
@@ -196,11 +224,11 @@ class RoomParticipant(models.Model):
     )
     joined_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
-    
+
     class Meta:
         unique_together = ['room', 'user']
         ordering = ['joined_at']
-    
+
     def __str__(self):
         return f"{self.user.username} in {self.room.name}"
 
@@ -252,3 +280,48 @@ class ChatInternalNote(models.Model):
 
     def __str__(self):
         return f"Internal note for room {self.room_id}"
+
+
+class GroupJoinRequest(models.Model):
+    STATUS_CHOICES = (
+        ('pending', 'Pending'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    )
+
+    room = models.ForeignKey(
+        Room,
+        on_delete=models.CASCADE,
+        related_name='join_requests',
+        limit_choices_to={'room_type': 'group'},
+    )
+    player = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='group_join_requests',
+        limit_choices_to={'user_type': 'player'},
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='reviewed_group_join_requests',
+        limit_choices_to={'user_type': 'agent'},
+    )
+
+    class Meta:
+        ordering = ['-requested_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['room', 'player'],
+                condition=Q(status='pending'),
+                name='unique_pending_group_join_request',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.player.username} -> group {self.room_id} ({self.status})"
