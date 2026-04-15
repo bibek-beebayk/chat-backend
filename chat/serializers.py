@@ -111,7 +111,10 @@ class RoomSerializer(serializers.ModelSerializer):
     def get_group_member_count(self, obj):
         if obj.room_type != 'group':
             return 0
-        return obj.participants.filter(is_active=True).count()
+        qs = obj.participants.filter(is_active=True)
+        if obj.group_admin_id:
+            qs = qs.exclude(user_id=obj.group_admin_id)
+        return qs.count()
 
     def get_user_is_group_admin(self, obj):
         request = self.context.get('request')

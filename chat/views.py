@@ -1015,7 +1015,7 @@ def discover_groups_view(request):
             'name': room.name,
             'group_description': room.group_description,
             'group_admin': room.group_admin.username if room.group_admin else None,
-            'member_count': room.participants.filter(is_active=True).count(),
+            'member_count': room.participants.filter(is_active=True).exclude(user_id=room.group_admin_id).count(),
             'relation': relation,
         })
     return Response(data, status=status.HTTP_200_OK)
@@ -1180,6 +1180,8 @@ def group_members_view(request, room_id):
     participants = RoomParticipant.objects.filter(
         room=room,
         is_active=True,
+    ).exclude(
+        user_id=room.group_admin_id
     ).select_related('user').order_by('user__username')
     data = [UserSerializer(p.user, context={'request': request}).data for p in participants]
     return Response(data, status=status.HTTP_200_OK)
