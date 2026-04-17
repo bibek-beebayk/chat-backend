@@ -14,6 +14,7 @@ urlpatterns = [
     path('groups/managed/requests/', views.managed_group_join_requests_view, name='groups-managed-requests'),
     path('groups/join-requests/<int:request_id>/review/', views.review_group_join_request_view, name='groups-join-request-review'),
     path('groups/<int:room_id>/join-requests/', views.request_group_join_view, name='groups-join-request-create'),
+    path('groups/<int:room_id>/leave/', views.leave_group_view, name='groups-leave'),
     path('groups/<int:room_id>/members/', views.group_members_view, name='groups-members'),
     path('groups/<int:room_id>/broadcast/', views.group_broadcast_view, name='groups-broadcast'),
     path('groups/<int:room_id>/direct/<int:player_id>/start/', views.start_direct_chat_from_group_view, name='groups-direct-start'),

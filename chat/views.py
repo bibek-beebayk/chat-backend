@@ -1295,6 +1295,30 @@ def start_direct_chat_from_group_view(request, room_id, player_id):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def leave_group_view(request, room_id):
+    user = request.user
+    if user.user_type != 'player':
+        return Response({'error': 'Only players can leave groups'}, status=status.HTTP_403_FORBIDDEN)
+
+    room = get_object_or_404(Room, id=room_id, room_type='group', status='OPEN')
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this group scope'}, status=status.HTTP_403_FORBIDDEN)
+    if room.group_admin_id == user.id:
+        return Response({'error': 'Group admin cannot leave the group'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        participant = RoomParticipant.objects.get(room=room, user=user)
+    except RoomParticipant.DoesNotExist:
+        return Response({'error': 'You are not a member of this group'}, status=status.HTTP_400_BAD_REQUEST)
+
+    participant.is_active = False
+    participant.save(update_fields=['is_active'])
+
+    return Response({'status': 'left'}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def test_email_view(request):
     """
     Test endpoint to send an email.
