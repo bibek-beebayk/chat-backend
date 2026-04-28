@@ -68,7 +68,6 @@ class Room(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='direct_player_rooms',
-        limit_choices_to={'user_type': 'agent'},
         null=True,
         blank=True,
     )
@@ -115,7 +114,7 @@ class Room(models.Model):
     def __str__(self):
         if self.room_type == 'direct_agent':
             p = self.direct_player.username if self.direct_player else "Unknown player"
-            a = self.direct_agent.username if self.direct_agent else "Unknown agent"
+            a = self.direct_agent.username if self.direct_agent else "Unknown peer"
             return f"Direct chat {p} <-> {a}"
         if self.room_type == 'group':
             admin_name = self.group_admin.username if self.group_admin else "Unknown admin"

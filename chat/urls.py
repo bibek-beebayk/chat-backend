@@ -20,6 +20,7 @@ urlpatterns = [
     path('groups/<int:room_id>/direct/<int:player_id>/start/', views.start_direct_chat_from_group_view, name='groups-direct-start'),
     path('rooms/', views.room_list_view, name='room-list'),
     path('rooms/direct/start/', views.start_direct_agent_chat_view, name='direct-agent-chat-start'),
+    path('rooms/direct/player/start/', views.start_direct_player_chat_view, name='direct-player-chat-start'),
     path('rooms/<int:room_id>/', views.room_detail_view, name='room-detail'),
     path('rooms/<int:room_id>/messages/', views.room_messages_view, name='room-messages'),
     path('rooms/<int:room_id>/join/', views.join_room_view, name='join-room'),

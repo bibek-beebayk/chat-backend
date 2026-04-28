@@ -66,6 +66,42 @@ def _can_user_access_room(room, user):
     return _can_non_staff_access_room(room, user)
 
 
+def _ensure_direct_room_for_users(left_user, right_user):
+    room, created = Room.objects.get_or_create(
+        room_type='direct_agent',
+        direct_player=left_user,
+        direct_agent=right_user,
+        defaults={
+            'status': 'OPEN',
+            'is_test_room': _is_test_actor(left_user),
+            'name': f'direct_{left_user.username}_{right_user.username}',
+        },
+    )
+    if room.status == 'CLOSED':
+        room.status = 'OPEN'
+        room.save(update_fields=['status'])
+
+    left_participant, _ = RoomParticipant.objects.get_or_create(
+        room=room,
+        user=left_user,
+        defaults={'is_active': True},
+    )
+    if not left_participant.is_active:
+        left_participant.is_active = True
+        left_participant.save(update_fields=['is_active'])
+
+    right_participant, _ = RoomParticipant.objects.get_or_create(
+        room=room,
+        user=right_user,
+        defaults={'is_active': True},
+    )
+    if not right_participant.is_active:
+        right_participant.is_active = True
+        right_participant.save(update_fields=['is_active'])
+
+    return room, created
+
+
 class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for Support Rooms (Workstations).
@@ -935,37 +971,64 @@ def start_direct_agent_chat_view(request):
         )
 
     with transaction.atomic():
-        room, created = Room.objects.get_or_create(
-            room_type='direct_agent',
-            direct_player=player,
-            direct_agent=agent,
-            defaults={
-                'status': 'OPEN',
-                'is_test_room': _is_test_actor(player),
-                'name': f'direct_{player.username}_{agent.username}',
-            },
-        )
-        if room.status == 'CLOSED':
-            room.status = 'OPEN'
-            room.save(update_fields=['status'])
+        room, created = _ensure_direct_room_for_users(player, agent)
 
-        player_participant, _ = RoomParticipant.objects.get_or_create(
-            room=room,
-            user=player,
-            defaults={'is_active': True},
-        )
-        if not player_participant.is_active:
-            player_participant.is_active = True
-            player_participant.save(update_fields=['is_active'])
+    room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
+    payload = RoomSerializer(room, context={'request': request}).data
+    payload['created'] = created
+    return Response(payload, status=status.HTTP_200_OK)
 
-        agent_participant, _ = RoomParticipant.objects.get_or_create(
-            room=room,
-            user=agent,
-            defaults={'is_active': True},
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def start_direct_player_chat_view(request):
+    player = request.user
+    if player.user_type != 'player':
+        return Response({'error': 'Only players can start direct player chat.'}, status=status.HTTP_403_FORBIDDEN)
+
+    target_id = request.data.get('player_id')
+    try:
+        target_id = int(target_id)
+    except (TypeError, ValueError):
+        return Response({'error': 'player_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if target_id == player.id:
+        return Response({'error': 'You cannot start a direct chat with yourself.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        target_player = User.objects.get(
+            id=target_id,
+            user_type='player',
+            is_active=True,
+            is_test_user=_is_test_actor(player),
         )
-        if not agent_participant.is_active:
-            agent_participant.is_active = True
-            agent_participant.save(update_fields=['is_active'])
+    except User.DoesNotExist:
+        return Response({'error': 'Player not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    from social.models import UserConnection
+
+    has_connection = UserConnection.objects.filter(
+        (
+            Q(requester=player, receiver=target_player) |
+            Q(requester=target_player, receiver=player)
+        ),
+        connection_type=UserConnection.TYPE_PLAYER_PLAYER,
+        status=UserConnection.STATUS_ACCEPTED,
+    ).exists()
+    if not has_connection:
+        return Response(
+            {'error': 'Players can chat only after the connection request is accepted.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    left_user = player
+    right_user = target_player
+    if target_player.id < player.id:
+        left_user = target_player
+        right_user = player
+
+    with transaction.atomic():
+        room, created = _ensure_direct_room_for_users(left_user, right_user)
 
     room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
     payload = RoomSerializer(room, context={'request': request}).data
@@ -1255,37 +1318,7 @@ def start_direct_chat_from_group_view(request, room_id, player_id):
         return Response({'error': 'Player is not an active member of this group'}, status=status.HTTP_400_BAD_REQUEST)
 
     with transaction.atomic():
-        direct_room, created = Room.objects.get_or_create(
-            room_type='direct_agent',
-            direct_player=player,
-            direct_agent=user,
-            defaults={
-                'status': 'OPEN',
-                'is_test_room': _is_test_actor(user),
-                'name': f'direct_{player.username}_{user.username}',
-            },
-        )
-        if direct_room.status == 'CLOSED':
-            direct_room.status = 'OPEN'
-            direct_room.save(update_fields=['status'])
-
-        player_participant, _ = RoomParticipant.objects.get_or_create(
-            room=direct_room,
-            user=player,
-            defaults={'is_active': True},
-        )
-        if not player_participant.is_active:
-            player_participant.is_active = True
-            player_participant.save(update_fields=['is_active'])
-
-        agent_participant, _ = RoomParticipant.objects.get_or_create(
-            room=direct_room,
-            user=user,
-            defaults={'is_active': True},
-        )
-        if not agent_participant.is_active:
-            agent_participant.is_active = True
-            agent_participant.save(update_fields=['is_active'])
+        direct_room, created = _ensure_direct_room_for_users(player, user)
 
     direct_room.unread_count = direct_room.messages.filter(is_read=False).exclude(sender=user).count()
     payload = RoomSerializer(direct_room, context={'request': request}).data
