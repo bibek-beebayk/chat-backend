@@ -27,6 +27,7 @@ from .serializers import (
     GroupJoinRequestSerializer,
 )
 from accounts.serializers import UserSerializer
+from chat_project.url_utils import build_public_absolute_uri
 from django.contrib.auth import get_user_model
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
@@ -935,6 +936,25 @@ def agent_search_view(request):
             'user_type': agent.user_type,
             'agent_availability': agent.agent_availability,
             'agent_status_note': agent.agent_status_note,
+            'profile_picture': (
+                build_public_absolute_uri(request, agent.profile_picture.url)
+                if agent.profile_picture
+                else None
+            ),
+            'profile_thumbnail': (
+                build_public_absolute_uri(request, agent.profile_thumbnail.url)
+                if getattr(agent, 'profile_thumbnail', None)
+                else None
+            ),
+            'avatar': (
+                build_public_absolute_uri(request, agent.profile_thumbnail.url)
+                if getattr(agent, 'profile_thumbnail', None)
+                else (
+                    build_public_absolute_uri(request, agent.profile_picture.url)
+                    if agent.profile_picture
+                    else None
+                )
+            ),
         }
         for agent in qs
     ]

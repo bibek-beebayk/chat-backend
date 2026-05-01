@@ -4,6 +4,9 @@ from django.utils import timezone
 from datetime import timedelta
 import random
 import string
+from io import BytesIO
+from django.core.files.base import ContentFile
+from PIL import Image, ImageOps
 
 
 class User(AbstractUser):
@@ -55,6 +58,12 @@ class User(AbstractUser):
         null=True,
         help_text='Optional user profile picture'
     )
+    profile_thumbnail = models.ImageField(
+        upload_to='profile_pictures/thumbs/',
+        blank=True,
+        null=True,
+        help_text='Low-size generated thumbnail for profile previews',
+    )
     agent_availability = models.CharField(
         max_length=10,
         choices=AGENT_AVAILABILITY_CHOICES,
@@ -72,6 +81,71 @@ class User(AbstractUser):
     
     class Meta:
         ordering = ['username']
+
+    def save(self, *args, **kwargs):
+        previous_profile_picture_name = None
+        if self.pk:
+            try:
+                previous = User.objects.only('profile_picture').get(pk=self.pk)
+                previous_profile_picture_name = (
+                    previous.profile_picture.name if previous.profile_picture else None
+                )
+            except User.DoesNotExist:
+                previous_profile_picture_name = None
+
+        super().save(*args, **kwargs)
+
+        current_profile_picture_name = (
+            self.profile_picture.name if self.profile_picture else None
+        )
+
+        if not self.profile_picture:
+            if self.profile_thumbnail:
+                self.profile_thumbnail.delete(save=False)
+                self.profile_thumbnail = None
+                User.objects.filter(pk=self.pk).update(profile_thumbnail=None)
+            return
+
+        # Regenerate thumbnail only when source image changes or thumbnail missing.
+        if (
+            self.profile_thumbnail
+            and previous_profile_picture_name == current_profile_picture_name
+        ):
+            return
+
+        self._generate_profile_thumbnail()
+
+    def _generate_profile_thumbnail(self):
+        if not self.profile_picture:
+            return
+        try:
+            self.profile_picture.open('rb')
+            image = Image.open(self.profile_picture)
+            image = ImageOps.exif_transpose(image).convert('RGB')
+
+            # Square center-crop thumbnail, tuned for fast avatar loading.
+            thumb_size = (160, 160)
+            thumb = ImageOps.fit(image, thumb_size, method=Image.Resampling.LANCZOS)
+
+            buffer = BytesIO()
+            thumb.save(buffer, format='JPEG', quality=55, optimize=True)
+            buffer.seek(0)
+
+            base_name = (self.profile_picture.name or f'user_{self.pk}').split('/')[-1]
+            base_without_ext = base_name.rsplit('.', 1)[0]
+            thumb_name = f'{base_without_ext}_thumb.jpg'
+
+            if self.profile_thumbnail:
+                self.profile_thumbnail.delete(save=False)
+            self.profile_thumbnail.save(
+                thumb_name,
+                ContentFile(buffer.read()),
+                save=False,
+            )
+            User.objects.filter(pk=self.pk).update(profile_thumbnail=self.profile_thumbnail.name)
+        except Exception:
+            # Do not fail the user save flow if thumbnail generation fails.
+            pass
 
 
 class EmailVerificationOTP(models.Model):

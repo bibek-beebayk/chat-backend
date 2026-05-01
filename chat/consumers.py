@@ -426,6 +426,9 @@ class NotificationConsumer(AsyncWebsocketConsumer):
     async def new_message_notification(self, event):
         await self.send(text_data=json.dumps(event))
 
+    async def connection_request_notification(self, event):
+        await self.send(text_data=json.dumps(event))
+
     @database_sync_to_async
     def update_presence(self, status):
         """Update user presence status."""

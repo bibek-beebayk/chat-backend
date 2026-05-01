@@ -9,7 +9,13 @@ SECRET_KEY = 'ih(u#bi@vd-0jog$myq824vrh9j5+*!2_w12)$u1x-29khfx%6'
 
 DEBUG = True
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'betunnel.worldstories.net', '*']
+# Set this in local env when using devtunnel, e.g.
+# PUBLIC_BACKEND_URL=https://<your-tunnel>.devtunnels.ms
+PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', '').strip()
+
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'betunnel.worldstories.net', '5dn4bj2m-8000.inc1.devtunnels.ms', '*']
+USE_X_FORWARDED_HOST = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 # Database
@@ -43,10 +49,14 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://betunnel.worldstories.net",
-    "https://chatfe.worldstories.net"
+    "https://chatfe.worldstories.net",
+    "https://5dn4bj2m-8000.inc1.devtunnels.ms"
 ]
 
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-z0-9-]+\.devtunnels\.ms$",
+]
 
 # CSRF settings
 CSRF_TRUSTED_ORIGINS = [
@@ -55,7 +65,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
     "https://betunnel.worldstories.net",
-    "https://chatfe.worldstories.net"
+    "https://chatfe.worldstories.net",
+    "https://5dn4bj2m-8000.inc1.devtunnels.ms"
 ]
 
 # Session settings

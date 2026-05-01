@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import HomeInfoSection, HomeInfoPoint
+from chat_project.url_utils import build_public_absolute_uri
 
 User = get_user_model()
 
@@ -10,6 +11,7 @@ class UserSerializer(serializers.ModelSerializer):
     
     verification_status = serializers.SerializerMethodField()
     profile_picture = serializers.SerializerMethodField()
+    profile_thumbnail = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
 
     class Meta:
@@ -25,6 +27,7 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             'verification_status',
             'profile_picture',
+            'profile_thumbnail',
             'avatar',
             'agent_availability',
             'agent_status_note',
@@ -44,11 +47,18 @@ class UserSerializer(serializers.ModelSerializer):
             return None
         request = self.context.get('request')
         url = obj.profile_picture.url
-        return request.build_absolute_uri(url) if request else url
+        return build_public_absolute_uri(request, url)
+
+    def get_profile_thumbnail(self, obj):
+        if not obj.profile_thumbnail:
+            return None
+        request = self.context.get('request')
+        url = obj.profile_thumbnail.url
+        return build_public_absolute_uri(request, url)
 
     def get_avatar(self, obj):
         # Backward-compatible alias used by older app clients.
-        return self.get_profile_picture(obj)
+        return self.get_profile_thumbnail(obj) or self.get_profile_picture(obj)
 
 
 class RegisterSerializer(serializers.ModelSerializer):

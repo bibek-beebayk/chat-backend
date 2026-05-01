@@ -163,3 +163,7 @@ LOGGING = {
 # Blog frontend ISR revalidation webhook (optional).
 BLOG_FRONTEND_REVALIDATE_URL = os.environ.get('BLOG_FRONTEND_REVALIDATE_URL', '')
 BLOG_FRONTEND_REVALIDATE_TOKEN = os.environ.get('BLOG_FRONTEND_REVALIDATE_TOKEN', '')
+
+# Optional absolute backend URL used when serializers need to build media URLs
+# without request context (e.g. token/login responses).
+PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', '').strip()
