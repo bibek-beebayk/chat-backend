@@ -1,5 +1,12 @@
 from django.contrib import admin
-from .models import Post
+from .models import Post, PostImage
+
+
+class PostImageInline(admin.TabularInline):
+    model = PostImage
+    extra = 1
+    fields = ('image', 'order')
+
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
@@ -7,6 +14,7 @@ class PostAdmin(admin.ModelAdmin):
     list_filter = ('visibility', 'is_pinned', 'is_active', 'created_at')
     search_fields = ('title', 'content')
     readonly_fields = ('created_at', 'updated_at', 'author')
+    inlines = [PostImageInline]
     
     def save_model(self, request, obj, form, change):
         if not obj.author_id:
