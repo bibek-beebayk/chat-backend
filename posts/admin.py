@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Post, PostImage
+from .models import Post, PostImage, PostLike, PostComment
 
 
 class PostImageInline(admin.TabularInline):
@@ -20,3 +20,18 @@ class PostAdmin(admin.ModelAdmin):
         if not obj.author_id:
             obj.author = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(PostLike)
+class PostLikeAdmin(admin.ModelAdmin):
+    list_display = ('post', 'user', 'created_at')
+    search_fields = ('post__title', 'user__username', 'user__email')
+    readonly_fields = ('created_at',)
+
+
+@admin.register(PostComment)
+class PostCommentAdmin(admin.ModelAdmin):
+    list_display = ('id', 'post', 'author', 'parent', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('content', 'author__username', 'post__title')
+    readonly_fields = ('created_at', 'updated_at')

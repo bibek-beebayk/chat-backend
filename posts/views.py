@@ -1,17 +1,24 @@
-from django.db.models import Q
+from django.db.models import Q, Count
+from django.utils import timezone
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
-from .models import Post, PostImage
-from .serializers import PostSerializer
+from .models import Post, PostImage, PostLike, PostComment
+from .serializers import PostSerializer, PostCommentSerializer
 from social.models import UserConnection
+from notifications.models import Notification, PushToken
+from notifications.fcm import send_push_notification
 
 
 class IsAuthorOrReadOnly(permissions.BasePermission):
     """Only the post author can edit/delete."""
     def has_object_permission(self, request, view, obj):
+        if getattr(view, 'action', None) in {'like', 'comments', 'comment_detail'}:
+            return bool(request.user and request.user.is_authenticated)
         if request.method in permissions.SAFE_METHODS:
             return True
         return obj.author == request.user
@@ -25,6 +32,77 @@ class PostViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsAuthorOrReadOnly]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     max_images_per_post = 5
+
+    def _send_user_notification(self, *, recipient, actor, title, body, link, ws_type):
+        if not recipient or not actor or recipient.id == actor.id:
+            return
+
+        Notification.objects.create(
+            user=recipient,
+            title=title,
+            body=body,
+            link=link,
+        )
+
+        channel_layer = get_channel_layer()
+        async_to_sync(channel_layer.group_send)(
+            f'user_{recipient.id}',
+            {
+                'type': ws_type,
+                'notification_type': ws_type,
+                'actor_id': actor.id,
+                'actor_username': actor.username,
+                'title': title,
+                'body': body,
+                'link': link,
+                'timestamp': timezone.now().isoformat(),
+            },
+        )
+
+        tokens = list(
+            PushToken.objects.filter(user=recipient, is_active=True).values_list(
+                'fcm_token', flat=True
+            )
+        )
+        if tokens:
+            try:
+                send_push_notification(tokens, title, body, link)
+            except Exception:
+                pass
+
+    def _notify_on_comment_created(self, *, post, comment, actor):
+        post_link = f'/posts/{post.id}'
+        notified_user_ids = set()
+
+        if comment.parent_id:
+            # Notify parent comment author about a reply.
+            parent_author = comment.parent.author
+            self._send_user_notification(
+                recipient=parent_author,
+                actor=actor,
+                title='New reply to your comment',
+                body=f'{actor.username} replied to your comment.',
+                link=post_link,
+                ws_type='post_reply_notification',
+            )
+            notified_user_ids.add(parent_author.id)
+
+        # Notify post author about new comment/reply.
+        if post.author_id not in notified_user_ids:
+            self._send_user_notification(
+                recipient=post.author,
+                actor=actor,
+                title='New comment on your post',
+                body=f'{actor.username} commented on your post.',
+                link=post_link,
+                ws_type='post_comment_notification',
+            )
+
+    def _annotated_queryset(self, queryset):
+        return queryset.annotate(
+            like_count=Count('likes', distinct=True),
+            comment_count=Count('comments', filter=Q(comments__is_active=True), distinct=True),
+        )
 
     def _get_connected_user_ids(self, user):
         """Get IDs of users connected (accepted) to the given user."""
@@ -71,13 +149,15 @@ class PostViewSet(viewsets.ModelViewSet):
             base_queryset = Post.objects.filter(is_active=True, is_pinned=True)
         else:
             base_queryset = Post.objects.filter(is_active=True)
-        return self._filter_by_visibility(base_queryset, user).order_by('-created_at')
+        filtered = self._filter_by_visibility(base_queryset, user).order_by('-created_at')
+        return self._annotated_queryset(filtered)
 
     @action(detail=False, methods=['get'], url_path='feed')
     def feed(self, request):
         """All posts feed with visibility filtering."""
         queryset = Post.objects.filter(is_active=True)
         queryset = self._filter_by_visibility(queryset, request.user).order_by('-created_at')
+        queryset = self._annotated_queryset(queryset)
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -91,6 +171,7 @@ class PostViewSet(viewsets.ModelViewSet):
     def my_posts(self, request):
         """List posts created by the authenticated user."""
         queryset = Post.objects.filter(author=request.user, is_active=True).order_by('-created_at')
+        queryset = self._annotated_queryset(queryset)
 
         page = self.paginate_queryset(queryset)
         if page is not None:
@@ -157,3 +238,120 @@ class PostViewSet(viewsets.ModelViewSet):
         # Soft delete
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+
+    @action(detail=True, methods=['post'], url_path='like')
+    def like(self, request, pk=None):
+        post = self.get_object()
+        existing = PostLike.objects.filter(post=post, user=request.user).first()
+        if existing:
+            existing.delete()
+            liked = False
+        else:
+            PostLike.objects.create(post=post, user=request.user)
+            liked = True
+
+        like_count = PostLike.objects.filter(post=post).count()
+        return Response(
+            {
+                'status': 'success',
+                'data': {
+                    'liked': liked,
+                    'like_count': like_count,
+                }
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=['get', 'post'], url_path='comments')
+    def comments(self, request, pk=None):
+        post = self.get_object()
+
+        if request.method.lower() == 'get':
+            queryset = PostComment.objects.filter(
+                post=post,
+                is_active=True,
+                parent__isnull=True,
+            ).order_by('created_at', 'id')
+            serializer = PostCommentSerializer(queryset, many=True, context={'request': request})
+            return Response({'status': 'success', 'data': serializer.data}, status=status.HTTP_200_OK)
+
+        content = (request.data.get('content') or '').strip()
+        if not content:
+            raise ValidationError({'content': 'Comment content is required.'})
+
+        parent = None
+        parent_id = request.data.get('parent')
+        if parent_id not in [None, '']:
+            try:
+                parent = PostComment.objects.get(
+                    id=int(parent_id),
+                    post=post,
+                    is_active=True,
+                )
+            except (PostComment.DoesNotExist, TypeError, ValueError):
+                raise ValidationError({'parent': 'Invalid parent comment.'})
+
+        comment = PostComment.objects.create(
+            post=post,
+            author=request.user,
+            parent=parent,
+            content=content,
+        )
+        self._notify_on_comment_created(post=post, comment=comment, actor=request.user)
+        serializer = PostCommentSerializer(comment, context={'request': request})
+        return Response({'status': 'success', 'data': serializer.data}, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=['patch', 'delete'],
+        url_path=r'comments/(?P<comment_id>[^/.]+)',
+    )
+    def comment_detail(self, request, pk=None, comment_id=None):
+        post = self.get_object()
+        try:
+            comment = PostComment.objects.get(
+                id=int(comment_id),
+                post=post,
+                is_active=True,
+            )
+        except (PostComment.DoesNotExist, TypeError, ValueError):
+            raise ValidationError({'comment': 'Comment not found.'})
+
+        if comment.author_id != request.user.id:
+            raise PermissionDenied('You can only edit or delete your own comments.')
+
+        if request.method.lower() == 'patch':
+            content = (request.data.get('content') or '').strip()
+            if not content:
+                raise ValidationError({'content': 'Comment content is required.'})
+            comment.content = content
+            comment.save(update_fields=['content', 'updated_at'])
+            serializer = PostCommentSerializer(comment, context={'request': request})
+            return Response({'status': 'success', 'data': serializer.data}, status=status.HTTP_200_OK)
+
+        # Soft-delete comment and all descendants to keep rendered tree consistent.
+        pending_ids = [comment.id]
+        all_ids = []
+        while pending_ids:
+            all_ids.extend(pending_ids)
+            pending_ids = list(
+                PostComment.objects.filter(
+                    parent_id__in=pending_ids,
+                    is_active=True,
+                ).values_list('id', flat=True)
+            )
+
+        deleted_count = PostComment.objects.filter(
+            id__in=all_ids,
+            is_active=True,
+        ).update(is_active=False)
+
+        return Response(
+            {
+                'status': 'success',
+                'data': {
+                    'deleted_count': deleted_count,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )

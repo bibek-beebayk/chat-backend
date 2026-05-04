@@ -66,3 +66,63 @@ class PostImage(models.Model):
 
     def __str__(self):
         return f'Image {self.order} for Post #{self.post_id}'
+
+
+class PostLike(models.Model):
+    """
+    Like relationship between a user and a post.
+    One user can like a post only once.
+    """
+    post = models.ForeignKey(
+        Post,
+        on_delete=models.CASCADE,
+        related_name='likes',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='post_likes',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['post', 'user'], name='unique_post_like')
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'Like(user={self.user_id}, post={self.post_id})'
+
+
+class PostComment(models.Model):
+    """
+    Post comment model supporting nested replies.
+    """
+    post = models.ForeignKey(
+        Post,
+        on_delete=models.CASCADE,
+        related_name='comments',
+    )
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='post_comments',
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        related_name='replies',
+        null=True,
+        blank=True,
+    )
+    content = models.TextField()
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at', 'id']
+
+    def __str__(self):
+        return f'Comment #{self.id} on Post #{self.post_id}'
