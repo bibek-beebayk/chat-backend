@@ -75,7 +75,7 @@ def _build_profile_action_state(user, target):
         }
 
     if user.user_type == 'player' and target.user_type == 'agent':
-        can_chat = status_label == 'connected'
+        can_chat = True
         can_connect = status_label in ('none', 'rejected')
         can_disconnect = status_label == 'connected'
         primary_action = 'chat'
@@ -84,7 +84,7 @@ def _build_profile_action_state(user, target):
         elif can_connect:
             secondary_action = 'connect'
     elif user.user_type == 'player' and target.user_type == 'player':
-        can_chat = status_label == 'connected'
+        can_chat = True
         can_connect = status_label in ('none', 'rejected')
         can_disconnect = status_label == 'connected'
         primary_action = 'chat'
@@ -92,6 +92,11 @@ def _build_profile_action_state(user, target):
             secondary_action = 'disconnect'
         elif can_connect:
             secondary_action = 'connect'
+    elif user.user_type == 'agent' and target.user_type == 'player':
+        can_chat = True
+        can_connect = False
+        can_disconnect = False
+        primary_action = 'chat'
 
     return {
         'connection': connection,
@@ -513,6 +518,18 @@ def accept_connection_view(request, connection_id):
     connection.accepted_at = timezone.now()
     connection.rejected_at = None
     connection.save(update_fields=['status', 'accepted_at', 'rejected_at', 'updated_at'])
+
+    Room.objects.filter(
+        room_type='direct_agent',
+        status='OPEN',
+        is_test_room=_is_test_actor(user),
+    ).filter(
+        Q(direct_player=connection.requester, direct_agent=connection.receiver) |
+        Q(direct_player=connection.receiver, direct_agent=connection.requester)
+    ).update(
+        direct_request_status='accepted',
+        direct_request_initiator=None,
+    )
     return Response(UserConnectionSerializer(connection, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
@@ -525,6 +542,19 @@ def reject_connection_view(request, connection_id):
     connection.rejected_at = timezone.now()
     connection.accepted_at = None
     connection.save(update_fields=['status', 'accepted_at', 'rejected_at', 'updated_at'])
+
+    Room.objects.filter(
+        room_type='direct_agent',
+        status='OPEN',
+        direct_request_status='pending',
+        is_test_room=_is_test_actor(user),
+    ).filter(
+        Q(direct_player=connection.requester, direct_agent=connection.receiver) |
+        Q(direct_player=connection.receiver, direct_agent=connection.requester)
+    ).update(
+        direct_request_status='rejected',
+        status='CLOSED',
+    )
     return Response(UserConnectionSerializer(connection, context={'request': request}).data, status=status.HTTP_200_OK)
 
 

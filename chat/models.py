@@ -45,6 +45,11 @@ class Room(models.Model):
         ('direct_agent', 'Direct Agent'),
         ('group', 'Group'),
     )
+    DIRECT_REQUEST_STATUS_CHOICES = (
+        ('accepted', 'Accepted'),
+        ('pending', 'Pending'),
+        ('rejected', 'Rejected'),
+    )
 
     name = models.CharField(max_length=100, blank=True)
     room_type = models.CharField(max_length=20, choices=ROOM_TYPE_CHOICES, default='support')
@@ -70,6 +75,18 @@ class Room(models.Model):
         related_name='direct_player_rooms',
         null=True,
         blank=True,
+    )
+    direct_request_status = models.CharField(
+        max_length=10,
+        choices=DIRECT_REQUEST_STATUS_CHOICES,
+        default='accepted',
+    )
+    direct_request_initiator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='initiated_direct_requests',
     )
     group_admin = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -143,6 +160,8 @@ class Room(models.Model):
             self.current_handler = None
             self.direct_player = None
             self.direct_agent = None
+            self.direct_request_status = 'accepted'
+            self.direct_request_initiator = None
         else:
             if not self.name and self.client:
                 self.name = f"chat_{self.client.username}"
@@ -154,6 +173,8 @@ class Room(models.Model):
             self.direct_agent = None
             self.group_admin = None
             self.group_description = ''
+            self.direct_request_status = 'accepted'
+            self.direct_request_initiator = None
         super().save(*args, **kwargs)
 
     class Meta:

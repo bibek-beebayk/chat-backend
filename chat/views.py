@@ -31,6 +31,7 @@ from chat_project.url_utils import build_public_absolute_uri
 from django.contrib.auth import get_user_model
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
+from social.models import UserConnection
 
 User = get_user_model()
 
@@ -101,6 +102,53 @@ def _ensure_direct_room_for_users(left_user, right_user):
         right_participant.save(update_fields=['is_active'])
 
     return room, created
+
+
+def _expected_connection_type_for_pair(left_user, right_user):
+    if left_user.user_type == 'player' and right_user.user_type == 'player':
+        return UserConnection.TYPE_PLAYER_PLAYER
+    return UserConnection.TYPE_PLAYER_AGENT
+
+
+def _has_accepted_connection(left_user, right_user):
+    connection_type = _expected_connection_type_for_pair(left_user, right_user)
+    return UserConnection.objects.filter(
+        (
+            Q(requester=left_user, receiver=right_user)
+            | Q(requester=right_user, receiver=left_user)
+        ),
+        connection_type=connection_type,
+        status=UserConnection.STATUS_ACCEPTED,
+    ).exists()
+
+
+def _sync_direct_request_state(room, initiator, counterpart):
+    if room.room_type != 'direct_agent':
+        return
+
+    has_connection = _has_accepted_connection(initiator, counterpart)
+    if has_connection:
+        fields = []
+        if room.direct_request_status != 'accepted':
+            room.direct_request_status = 'accepted'
+            fields.append('direct_request_status')
+        if room.direct_request_initiator_id is not None:
+            room.direct_request_initiator = None
+            fields.append('direct_request_initiator')
+        if fields:
+            room.save(update_fields=fields)
+        return
+
+    # No accepted connection: keep this chat under message requests.
+    fields = []
+    if room.direct_request_status != 'pending':
+        room.direct_request_status = 'pending'
+        fields.append('direct_request_status')
+    if room.direct_request_initiator_id is None:
+        room.direct_request_initiator = initiator
+        fields.append('direct_request_initiator')
+    if fields:
+        room.save(update_fields=fields)
 
 
 class SupportRoomViewSet(viewsets.ReadOnlyModelViewSet):
@@ -277,6 +325,7 @@ def room_list_view(request):
         direct_rooms = Room.objects.filter(
             room_type='direct_agent',
             status='OPEN',
+            direct_request_status='accepted',
             is_test_room=_is_test_actor(user),
             participants__user=user,
             participants__is_active=True,
@@ -307,6 +356,40 @@ def room_list_view(request):
         rooms.extend(list(group_rooms))
     
     serializer = RoomSerializer(rooms, many=True, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def room_message_requests_view(request):
+    """
+    List pending direct chat requests for the authenticated non-staff user.
+    """
+    user = request.user
+    if user.user_type == 'staff':
+        return Response([], status=status.HTTP_200_OK)
+
+    latest_sender_subquery = Message.objects.filter(
+        room=OuterRef('pk')
+    ).order_by('-timestamp').values('sender_id')[:1]
+
+    requests_qs = Room.objects.filter(
+        room_type='direct_agent',
+        status='OPEN',
+        direct_request_status='pending',
+        is_test_room=_is_test_actor(user),
+        participants__user=user,
+        participants__is_active=True,
+    ).distinct().annotate(
+        unread_count=Count(
+            'messages',
+            filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
+        ),
+        last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
+        last_message_sender_id=Subquery(latest_sender_subquery),
+    ).order_by('-unread_count', '-last_activity')
+
+    serializer = RoomSerializer(requests_qs, many=True, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -425,6 +508,47 @@ def room_messages_view(request, room_id):
         messages = list(reversed(messages)) # Show oldest first
     
     serializer = MessageSerializer(messages, many=True, context={'request': request})
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def room_message_request_respond_view(request, room_id):
+    """
+    Accept or reject an incoming direct message request.
+    """
+    user = request.user
+    room = get_object_or_404(
+        Room,
+        id=room_id,
+        room_type='direct_agent',
+        status='OPEN',
+    )
+    if not _room_scope_match(room, user):
+        return Response({'error': 'Not authorized for this room scope'}, status=status.HTTP_403_FORBIDDEN)
+    if user.user_type == 'staff':
+        return Response({'error': 'Staff cannot respond to direct message requests.'}, status=status.HTTP_403_FORBIDDEN)
+    if not room.participants.filter(user=user, is_active=True).exists():
+        return Response({'error': 'Not authorized'}, status=status.HTTP_403_FORBIDDEN)
+    if room.direct_request_status != 'pending':
+        return Response({'error': 'This room is not a pending message request.'}, status=status.HTTP_400_BAD_REQUEST)
+    if room.direct_request_initiator_id == user.id:
+        return Response({'error': 'You cannot respond to your own outgoing request.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    action = (request.data.get('action') or '').strip().lower()
+    if action not in ('accept', 'reject'):
+        return Response({'error': "action must be 'accept' or 'reject'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if action == 'accept':
+        room.direct_request_status = 'accepted'
+        room.direct_request_initiator = None
+        room.save(update_fields=['direct_request_status', 'direct_request_initiator'])
+    else:
+        room.direct_request_status = 'rejected'
+        room.status = 'CLOSED'
+        room.save(update_fields=['direct_request_status', 'status'])
+
+    serializer = RoomSerializer(room, context={'request': request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -992,6 +1116,7 @@ def start_direct_agent_chat_view(request):
 
     with transaction.atomic():
         room, created = _ensure_direct_room_for_users(player, agent)
+        _sync_direct_request_state(room, player, agent)
 
     room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
     payload = RoomSerializer(room, context={'request': request}).data
@@ -1002,9 +1127,9 @@ def start_direct_agent_chat_view(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def start_direct_player_chat_view(request):
-    player = request.user
-    if player.user_type != 'player':
-        return Response({'error': 'Only players can start direct player chat.'}, status=status.HTTP_403_FORBIDDEN)
+    requester = request.user
+    if requester.user_type not in ('player', 'agent'):
+        return Response({'error': 'Only players and agents can start direct player chat.'}, status=status.HTTP_403_FORBIDDEN)
 
     target_id = request.data.get('player_id')
     try:
@@ -1012,7 +1137,7 @@ def start_direct_player_chat_view(request):
     except (TypeError, ValueError):
         return Response({'error': 'player_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if target_id == player.id:
+    if target_id == requester.id:
         return Response({'error': 'You cannot start a direct chat with yourself.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
@@ -1020,37 +1145,22 @@ def start_direct_player_chat_view(request):
             id=target_id,
             user_type='player',
             is_active=True,
-            is_test_user=_is_test_actor(player),
+            is_test_user=_is_test_actor(requester),
         )
     except User.DoesNotExist:
         return Response({'error': 'Player not found'}, status=status.HTTP_404_NOT_FOUND)
 
-    from social.models import UserConnection
-
-    has_connection = UserConnection.objects.filter(
-        (
-            Q(requester=player, receiver=target_player) |
-            Q(requester=target_player, receiver=player)
-        ),
-        connection_type=UserConnection.TYPE_PLAYER_PLAYER,
-        status=UserConnection.STATUS_ACCEPTED,
-    ).exists()
-    if not has_connection:
-        return Response(
-            {'error': 'Players can chat only after the connection request is accepted.'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-
-    left_user = player
+    left_user = requester
     right_user = target_player
-    if target_player.id < player.id:
+    if target_player.id < requester.id:
         left_user = target_player
-        right_user = player
+        right_user = requester
 
     with transaction.atomic():
         room, created = _ensure_direct_room_for_users(left_user, right_user)
+        _sync_direct_request_state(room, requester, target_player)
 
-    room.unread_count = room.messages.filter(is_read=False).exclude(sender=player).count()
+    room.unread_count = room.messages.filter(is_read=False).exclude(sender=requester).count()
     payload = RoomSerializer(room, context={'request': request}).data
     payload['created'] = created
     return Response(payload, status=status.HTTP_200_OK)
@@ -1339,6 +1449,10 @@ def start_direct_chat_from_group_view(request, room_id, player_id):
 
     with transaction.atomic():
         direct_room, created = _ensure_direct_room_for_users(player, user)
+        if direct_room.direct_request_status != 'accepted' or direct_room.direct_request_initiator_id is not None:
+            direct_room.direct_request_status = 'accepted'
+            direct_room.direct_request_initiator = None
+            direct_room.save(update_fields=['direct_request_status', 'direct_request_initiator'])
 
     direct_room.unread_count = direct_room.messages.filter(is_read=False).exclude(sender=user).count()
     payload = RoomSerializer(direct_room, context={'request': request}).data

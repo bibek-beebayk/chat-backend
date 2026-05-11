@@ -93,6 +93,10 @@ class RoomSerializer(serializers.ModelSerializer):
     counterpart = serializers.SerializerMethodField()
     last_activity = serializers.DateTimeField(read_only=True)
     last_message_sender_id = serializers.IntegerField(read_only=True)
+    is_message_request = serializers.SerializerMethodField()
+    message_request_direction = serializers.SerializerMethodField()
+    direct_request_status = serializers.CharField(read_only=True)
+    direct_request_initiator = UserSerializer(read_only=True)
 
     class Meta:
         model = Room
@@ -101,7 +105,8 @@ class RoomSerializer(serializers.ModelSerializer):
             'group_admin', 'group_description', 'group_member_count', 'user_is_group_admin',
             'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online',
             'queue', 'queue_name', 'queue_type', 'can_switch_station', 'last_activity',
-            'last_message_sender_id'
+            'last_message_sender_id', 'is_message_request', 'message_request_direction',
+            'direct_request_status', 'direct_request_initiator'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -178,6 +183,20 @@ class RoomSerializer(serializers.ModelSerializer):
         if target is None:
             return None
         return UserSerializer(target).data
+
+    def get_is_message_request(self, obj):
+        return obj.room_type == 'direct_agent' and obj.direct_request_status == 'pending'
+
+    def get_message_request_direction(self, obj):
+        if obj.room_type != 'direct_agent' or obj.direct_request_status != 'pending':
+            return 'none'
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return 'none'
+        if obj.direct_request_initiator_id == user.id:
+            return 'outgoing'
+        return 'incoming'
 
 
 class RoomDetailSerializer(serializers.ModelSerializer):
