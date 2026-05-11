@@ -473,14 +473,22 @@ def disconnect_connection_view(request):
         if target.user_type == 'agent'
         else UserConnection.TYPE_PLAYER_PLAYER
     )
+    # 1) Active accepted connection (either direction)
+    # 2) Outgoing pending request from current user (unsend/cancel request)
     connection = UserConnection.objects.filter(
         _connection_q(user, target),
         connection_type=expected_connection_type,
-        status=UserConnection.STATUS_ACCEPTED,
+    ).filter(
+        Q(status=UserConnection.STATUS_ACCEPTED) |
+        Q(
+            status=UserConnection.STATUS_PENDING,
+            requester=user,
+            receiver=target,
+        )
     ).order_by('-updated_at').first()
 
     if not connection:
-        return Response({'error': 'No active connection found for this user pair.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'error': 'No active or pending outgoing connection found for this user pair.'}, status=status.HTTP_404_NOT_FOUND)
 
     connection.delete()
     return Response({'status': 'success'}, status=status.HTTP_200_OK)
