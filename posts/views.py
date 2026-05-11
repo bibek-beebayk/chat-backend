@@ -1,4 +1,7 @@
+import json
+import re
 from django.db.models import Q, Count
+from django.db import transaction
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -12,12 +15,13 @@ from .serializers import PostSerializer, PostCommentSerializer
 from social.models import UserConnection
 from notifications.models import Notification, PushToken
 from notifications.fcm import send_push_notification
+from chat.models import Room, Message, RoomParticipant
 
 
 class IsAuthorOrReadOnly(permissions.BasePermission):
     """Only the post author can edit/delete."""
     def has_object_permission(self, request, view, obj):
-        if getattr(view, 'action', None) in {'like', 'comments', 'comment_detail'}:
+        if getattr(view, 'action', None) in {'like', 'comments', 'comment_detail', 'share_to_chats'}:
             return bool(request.user and request.user.is_authenticated)
         if request.method in permissions.SAFE_METHODS:
             return True
@@ -32,6 +36,7 @@ class PostViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, IsAuthorOrReadOnly]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     max_images_per_post = 5
+    post_share_prefix = 'POST_SHARE::'
 
     def _send_user_notification(self, *, recipient, actor, title, body, link, ws_type):
         if not recipient or not actor or recipient.id == actor.id:
@@ -103,6 +108,22 @@ class PostViewSet(viewsets.ModelViewSet):
             like_count=Count('likes', distinct=True),
             comment_count=Count('comments', filter=Q(comments__is_active=True), distinct=True),
         )
+
+    def _can_user_share_to_room(self, room, user):
+        if user.user_type == 'staff':
+            if room.room_type in ('direct_agent', 'group'):
+                return False
+            return (
+                room.current_handler_id == user.id
+                or (room.queue_id is not None and user.active_support_rooms.filter(id=room.queue_id).exists())
+                or room.participants.filter(user=user, is_active=True).exists()
+            )
+
+        if room.room_type == 'support':
+            return room.client_id == user.id
+        if room.room_type in ('direct_agent', 'group'):
+            return room.participants.filter(user=user, is_active=True).exists()
+        return False
 
     def _get_connected_user_ids(self, user):
         """Get IDs of users connected (accepted) to the given user."""
@@ -238,6 +259,123 @@ class PostViewSet(viewsets.ModelViewSet):
         # Soft delete
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+
+    @action(detail=True, methods=['post'], url_path='share-to-chats')
+    def share_to_chats(self, request, pk=None):
+        post = self.get_object()
+        user = request.user
+
+        room_ids_raw = request.data.get('room_ids')
+        if not isinstance(room_ids_raw, list):
+            raise ValidationError({'room_ids': 'room_ids must be a list of chat room ids.'})
+
+        room_ids = []
+        for item in room_ids_raw:
+            try:
+                room_id = int(item)
+            except (TypeError, ValueError):
+                continue
+            if room_id > 0:
+                room_ids.append(room_id)
+
+        room_ids = list(dict.fromkeys(room_ids))
+        if not room_ids:
+            raise ValidationError({'room_ids': 'Select at least one chat room.'})
+
+        rooms = Room.objects.filter(
+            id__in=room_ids,
+            status='OPEN',
+            is_test_room=bool(getattr(user, 'is_test_user', False)),
+        )
+        rooms_by_id = {room.id: room for room in rooms}
+
+        accessible_rooms = []
+        denied_room_ids = []
+        for room_id in room_ids:
+            room = rooms_by_id.get(room_id)
+            if room is None:
+                denied_room_ids.append(room_id)
+                continue
+            if self._can_user_share_to_room(room, user):
+                accessible_rooms.append(room)
+            else:
+                denied_room_ids.append(room_id)
+
+        if not accessible_rooms:
+            return Response(
+                {
+                    'status': 'error',
+                    'code': 'forbidden',
+                    'message': 'No selected chats are accessible for sharing.',
+                    'errors': {'denied_room_ids': denied_room_ids},
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        title = (post.title or '').strip()
+        plain_content = re.sub(r'<[^>]+>', '', post.content or '').strip()
+        excerpt = plain_content[:180].strip()
+        first_image = post.images.order_by('order', 'id').first()
+        image_url = request.build_absolute_uri(first_image.image.url) if first_image else None
+        post_url = request.build_absolute_uri(f'/api/posts/{post.id}/')
+        payload = {
+            'post_id': post.id,
+            'title': title,
+            'excerpt': excerpt,
+            'post_url': post_url,
+            'image_url': image_url,
+            'author_username': post.author.username if post.author else '',
+        }
+        message_content = f'{self.post_share_prefix}{json.dumps(payload, separators=(",", ":"))}'
+
+        channel_layer = get_channel_layer()
+        created_count = 0
+        with transaction.atomic():
+            for room in accessible_rooms:
+                participant, _ = RoomParticipant.objects.get_or_create(
+                    room=room,
+                    user=user,
+                    defaults={'is_active': True},
+                )
+                if not participant.is_active:
+                    participant.is_active = True
+                    participant.save(update_fields=['is_active'])
+
+                message = Message.objects.create(
+                    room=room,
+                    sender=user,
+                    content=message_content,
+                )
+                created_count += 1
+
+                async_to_sync(channel_layer.group_send)(
+                    f'chat_{room.id}',
+                    {
+                        'type': 'chat_message',
+                        'message': message.content,
+                        'username': user.username,
+                        'user_id': user.id,
+                        'user_type': user.user_type,
+                        'message_id': message.id,
+                        'timestamp': message.timestamp.isoformat(),
+                        'is_read': message.is_read,
+                        'is_broadcast': message.is_broadcast,
+                        'reply_to': None,
+                        'reply_to_message': None,
+                    }
+                )
+
+        return Response(
+            {
+                'status': 'success',
+                'data': {
+                    'shared_to_count': created_count,
+                    'shared_room_ids': [room.id for room in accessible_rooms],
+                    'denied_room_ids': denied_room_ids,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=['post'], url_path='like')
     def like(self, request, pk=None):
