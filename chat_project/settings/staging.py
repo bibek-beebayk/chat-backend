@@ -71,7 +71,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "http://192.168.1.67:3000",
-    "https://blog.hrlzone.com"
+    "https://blog.hrlzone.com",
+    "https://5dn4bj2m-3000.inc1.devtunnels.ms"
 ]
 CSRF_TRUSTED_ORIGINS = [
     "https://chat-frontend-nu-five.vercel.app", 
@@ -79,7 +80,8 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
     "http://192.168.1.67:3000",
-    "https://blog.hrlzone.com"
+    "https://blog.hrlzone.com",
+    "https://5dn4bj2m-3000.inc1.devtunnels.ms"
 ]
 
 # Static Files (Whitenoise) & Media Files (Cloudflare R2)
