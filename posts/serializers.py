@@ -48,6 +48,7 @@ class PostSerializer(serializers.ModelSerializer):
             'id', 'title', 'content', 'raw_content', 'image', 'video',
             'link', 'visibility', 'is_pinned', 'author', 'images',
             'like_count', 'comment_count', 'is_liked',
+            'cta_label', 'cta_link',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'author', 'is_pinned']

@@ -40,6 +40,8 @@ class Post(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
+    cta_label = models.CharField(max_length=50, blank=True, default='', help_text="Button text for Call to Action")
+    cta_link = models.URLField(blank=True, null=True, help_text="URL for Call to Action button")
 
     class Meta:
         ordering = ['-created_at']
