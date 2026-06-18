@@ -25,9 +25,9 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": os.environ.get("PGDATABASE", "chat_db"),
         "USER": os.environ.get("PGUSER", "postgres"),
-        "PASSWORD": os.environ.get("PGPASSWORD", "postgres"),
-        "HOST": os.environ.get("PGHOST", ""),
-        "PORT": os.environ.get("PGPORT", ""),
+        "PASSWORD": os.environ.get("PGPASSWORD", "beebayk"),
+        "HOST": os.environ.get("PGHOST", "127.0.0.1"),
+        "PORT": os.environ.get("PGPORT", "5432"),
         "ATOMIC_REQUESTS": True,
     }
 }

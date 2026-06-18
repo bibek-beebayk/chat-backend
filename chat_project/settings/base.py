@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     'notifications',
     'analytics',
     'social',
+    'announcements',
 ]
 
 MIDDLEWARE = [
