@@ -65,8 +65,8 @@ CSRF_COOKIE_SAMESITE = 'None'
 # CORS/CSRF (Restrictive)
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com","https://blog.hrlzone.com"]
-CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com", "https://blog.hrlzone.com"]
+CORS_ALLOWED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com","https://blog.hrlzone.com", "https://community-dev.netlify.app"]
+CSRF_TRUSTED_ORIGINS = ["https://chat-frontend-nu-five.vercel.app", "https://chat-backend-production-c7cd.up.railway.app", "https://community.hrlzone.com", "https://event.hrlzone.com", "https://hradmin.hrlzone.com", "https://blog.hrlzone.com", "https://community-dev.netlify.app"]
 
 # Static Files (Whitenoise)
 # Static Files (Whitenoise) & Media Files (Cloudflare R2)
