@@ -7,6 +7,15 @@ from accounts.models import User
 from chat.models import Message
 from notifications.models import MessageDelivery
 from events.models import EventRegistration
+from .models import ActivityEvent
+
+
+@admin.register(ActivityEvent)
+class ActivityEventAdmin(admin.ModelAdmin):
+    list_display = ('actor', 'kind', 'action', 'target_title', 'created_at')
+    list_filter = ('kind', 'created_at')
+    search_fields = ('actor__username', 'action', 'target_title')
+    readonly_fields = ('created_at',)
 from datetime import datetime
 
 # Create a custom dashboard view

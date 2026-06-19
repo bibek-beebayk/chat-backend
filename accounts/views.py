@@ -30,6 +30,7 @@ from .models import (
     HomeInfoSection,
 )
 from chat_project.utils import send_zeptomail, search_player
+from rewards.services import record_daily_visit
 
 User = get_user_model()
 
@@ -119,6 +120,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 
 def _build_jwt_login_response(user, request, message='Login successful.'):
+    record_daily_visit(user)
     refresh = RefreshToken.for_user(user)
     return {
         'message': message,
@@ -689,12 +691,13 @@ def verify_otp_view(request):
     
     # Generate tokens
     from rest_framework_simplejwt.tokens import RefreshToken
+    record_daily_visit(user)
     refresh = RefreshToken.for_user(user)
     
     return Response(
         {
             'message': 'Email verified successfully! You are now logged in.',
-            'user': UserSerializer(user).data,
+            'user': UserSerializer(user, context={'request': request}).data,
             'access': str(refresh.access_token),
             'refresh': str(refresh),
         },

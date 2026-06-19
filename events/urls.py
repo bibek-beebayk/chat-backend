@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     path('latest/', views.get_latest_event, name='get_latest_event'),
     path('active/', views.get_active_events, name='get_active_events'),
+    path('upcoming/', views.get_upcoming_events, name='get_upcoming_events'),
 
     path('register-init/', views.register_init_view, name='register_init'),
     path('register/', views.register_for_event_view, name='register_for_event'),

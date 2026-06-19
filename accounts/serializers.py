@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import HomeInfoSection, HomeInfoPoint
 from chat_project.url_utils import build_public_absolute_uri
+from rewards.services import record_daily_visit
 
 User = get_user_model()
 
@@ -129,6 +130,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 attrs[self.username_field] = identifier
 
         data = super().validate(attrs)
+        record_daily_visit(self.user)
 
         data['user'] = UserSerializer(
             self.user,

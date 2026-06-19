@@ -26,10 +26,11 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'events',
     'notifications',
-    'analytics',
+    'analytics.apps.AnalyticsConfig',
     'social',
     'announcements',
     'faqs',
+    'rewards',
 ]
 
 MIDDLEWARE = [

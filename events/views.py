@@ -60,6 +60,24 @@ def get_active_events(request):
     serializer = EventSerializer(events, many=True, context={'request': request})
     return Response(serializer.data)
 
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_upcoming_events(request):
+    now = timezone.now()
+    limit = parse_limit(request.query_params.get('limit'), default=3, maximum=12)
+    events = Event.objects.filter(start_date__gte=now).order_by('start_date')[:limit]
+    serializer = EventSerializer(events, many=True, context={'request': request})
+    return Response(serializer.data)
+
+
+def parse_limit(value, default=3, maximum=12):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(parsed, maximum))
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_init_view(request):
