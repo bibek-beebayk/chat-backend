@@ -6,6 +6,8 @@ import sys
 
 def main():
     """Run administrative tasks."""
+    from chat_project.env_loader import load_local_env
+    load_local_env()
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'chat_project.settings')
     try:
         from django.core.management import execute_from_command_line

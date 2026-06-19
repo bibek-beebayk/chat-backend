@@ -165,6 +165,13 @@ LOGGING = {
 BLOG_FRONTEND_REVALIDATE_URL = os.environ.get('BLOG_FRONTEND_REVALIDATE_URL', '')
 BLOG_FRONTEND_REVALIDATE_TOKEN = os.environ.get('BLOG_FRONTEND_REVALIDATE_TOKEN', '')
 
+# Google Identity Services client IDs allowed to authenticate against this backend.
+GOOGLE_OAUTH_CLIENT_IDS = [
+    value.strip()
+    for value in os.environ.get('GOOGLE_OAUTH_CLIENT_IDS', os.environ.get('GOOGLE_OAUTH_CLIENT_ID', '')).split(',')
+    if value.strip()
+]
+
 # Optional absolute backend URL used when serializers need to build media URLs
 # without request context (e.g. token/login responses).
 PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', '').strip()

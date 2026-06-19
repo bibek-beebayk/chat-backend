@@ -4,9 +4,12 @@ from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.utils.text import slugify
 from django.utils import timezone
 from django.db.models import Q
 from django.db import transaction
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
 from .serializers import (
     RegisterSerializer,
     UserSerializer,
@@ -18,6 +21,7 @@ from .serializers import (
     EmailChangeVerifySerializer,
     CurrentPasswordSerializer,
     AgentAvailabilityUpdateSerializer,
+    GoogleLoginSerializer,
 )
 from .models import (
     EmailVerificationOTP,
@@ -112,6 +116,114 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     Login view that returns JWT tokens + user data.
     """
     serializer_class = CustomTokenObtainPairSerializer
+
+
+def _build_jwt_login_response(user, request, message='Login successful.'):
+    refresh = RefreshToken.for_user(user)
+    return {
+        'message': message,
+        'user': UserSerializer(user, context={'request': request}).data,
+        'access': str(refresh.access_token),
+        'refresh': str(refresh),
+    }
+
+
+def _unique_google_username(email, name=''):
+    local_part = email.split('@', 1)[0]
+    base = slugify(name) or slugify(local_part) or 'google-user'
+    base = base[:24].strip('-') or 'google-user'
+    username = base
+    suffix = 1
+    while User.objects.filter(username__iexact=username).exists():
+        suffix += 1
+        username = f'{base[:20]}-{suffix}'
+    return username
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_login_view(request):
+    serializer = GoogleLoginSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    client_ids = getattr(settings, 'GOOGLE_OAUTH_CLIENT_IDS', [])
+    if not client_ids:
+        return Response(
+            {'error': 'Google login is not configured.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    credential = serializer.validated_data['credential']
+    token_info = None
+    last_error = None
+
+    for client_id in client_ids:
+        try:
+            token_info = id_token.verify_oauth2_token(
+                credential,
+                google_requests.Request(),
+                client_id,
+            )
+            break
+        except ValueError as exc:
+            last_error = exc
+
+    if token_info is None:
+        return Response(
+            {'error': 'Invalid Google credential.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    email = (token_info.get('email') or '').strip().lower()
+    if not email:
+        return Response(
+            {'error': 'Google account did not provide an email address.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if token_info.get('email_verified') is not True:
+        return Response(
+            {'error': 'Google email address is not verified.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    with transaction.atomic():
+        user = User.objects.filter(email__iexact=email).first()
+        created = False
+
+        if user is None:
+            full_name = token_info.get('name') or ''
+            user = User.objects.create_user(
+                username=_unique_google_username(email, full_name),
+                email=email,
+                password=None,
+                user_type='player',
+                first_name=(token_info.get('given_name') or '')[:150],
+                last_name=(token_info.get('family_name') or '')[:150],
+            )
+            created = True
+
+        update_fields = []
+        if not user.is_active:
+            user.is_active = True
+            update_fields.append('is_active')
+        if not user.first_name and token_info.get('given_name'):
+            user.first_name = token_info.get('given_name')[:150]
+            update_fields.append('first_name')
+        if not user.last_name and token_info.get('family_name'):
+            user.last_name = token_info.get('family_name')[:150]
+            update_fields.append('last_name')
+        if update_fields:
+            user.save(update_fields=update_fields)
+
+    return Response(
+        _build_jwt_login_response(
+            user,
+            request,
+            message='Google account connected.' if created else 'Login successful.',
+        ),
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(['POST'])

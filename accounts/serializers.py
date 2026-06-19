@@ -109,21 +109,31 @@ class VerifyUserIDSerializer(serializers.Serializer):
             raise serializers.ValidationError("User ID cannot be empty.")
         return value
 
-
-
-
-
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
-    Custom serializer to include user data in the token response.
+    Custom serializer to allow username-or-email login and include user data.
     """
     def validate(self, attrs):
+        identifier = (attrs.get(self.username_field) or '').strip()
+        if identifier:
+            if '@' in identifier:
+                user = User.objects.filter(email__iexact=identifier).only('username').first()
+                if user:
+                    attrs[self.username_field] = user.username
+                else:
+                    attrs[self.username_field] = identifier
+            else:
+                attrs[self.username_field] = identifier
+
         data = super().validate(attrs)
-        
-        # Add extra responses here
-        data['user'] = UserSerializer(self.user).data
+
+        data['user'] = UserSerializer(
+            self.user,
+            context=self.context,
+        ).data
         return data
 
 
@@ -217,6 +227,10 @@ class ResetPasswordCompleteSerializer(serializers.Serializer):
         if data['new_password'] != data['confirm_new_password']:
             raise serializers.ValidationError({"confirm_new_password": "Passwords do not match."})
         return data
+
+
+class GoogleLoginSerializer(serializers.Serializer):
+    credential = serializers.CharField(required=True, trim_whitespace=False)
 
 
 class HomeInfoSectionSerializer(serializers.ModelSerializer):
