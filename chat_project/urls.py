@@ -20,5 +20,6 @@ urlpatterns = [
     path('api/events/', include('events.urls')),
     path('api/notifications/', include('notifications.urls')),
     path('api/announcements/', include('announcements.urls')),
+    path('api/faqs/', include('faqs.urls')),
     path('admin/user-search/', admin_player_search_view),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
