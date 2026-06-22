@@ -8,4 +8,5 @@ urlpatterns = [
     path('streak/redeem/', views.create_redemption_request_view, name='login-streak-redeem'),
     path('streak/redemptions/', views.redemption_request_list_view, name='login-streak-redemptions'),
     path('streak/redemptions/<int:request_id>/', views.redemption_request_update_view, name='login-streak-redemption-update'),
+    path('scratch-redemptions/', views.create_scratch_redemption_view, name='scratch-redemption-create'),
 ]

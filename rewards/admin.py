@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import LoginStreak, LoginStreakEntry, StreakRedemptionRequest
+from .models import LoginStreak, LoginStreakEntry, ScratchRedemption, ScratchRewardClaim, StreakRedemptionRequest
 
 
 @admin.register(LoginStreak)
@@ -18,7 +18,23 @@ class LoginStreakEntryAdmin(admin.ModelAdmin):
 
 @admin.register(StreakRedemptionRequest)
 class StreakRedemptionRequestAdmin(admin.ModelAdmin):
-    list_display = ('user', 'amount', 'status', 'reviewed_by', 'reviewed_at', 'completed_at', 'created_at')
-    list_filter = ('status', 'created_at', 'reviewed_at')
+    list_display = ('user', 'source', 'amount', 'status', 'reviewed_by', 'reviewed_at', 'completed_at', 'created_at')
+    list_filter = ('source', 'status', 'created_at', 'reviewed_at')
     search_fields = ('user__username', 'user__email', 'note', 'staff_note')
     readonly_fields = ('created_at', 'updated_at')
+
+
+@admin.register(ScratchRedemption)
+class ScratchRedemptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'source', 'amount', 'confirmed_at')
+    list_filter = ('source', 'confirmed_at')
+    search_fields = ('user__username', 'user__email', 'source')
+    readonly_fields = ('confirmed_at',)
+
+
+@admin.register(ScratchRewardClaim)
+class ScratchRewardClaimAdmin(admin.ModelAdmin):
+    list_display = ('reward_id', 'user', 'source', 'amount', 'expires_at', 'claimed_at')
+    list_filter = ('source', 'claimed_at', 'expires_at')
+    search_fields = ('reward_id', 'user__username', 'user__email')
+    readonly_fields = ('claimed_at',)

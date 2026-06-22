@@ -177,3 +177,7 @@ GOOGLE_OAUTH_CLIENT_IDS = [
 # Optional absolute backend URL used when serializers need to build media URLs
 # without request context (e.g. token/login responses).
 PUBLIC_BACKEND_URL = os.environ.get('PUBLIC_BACKEND_URL', '').strip()
+
+# Shared HMAC secret used to verify scratch reward redirect URLs from the
+# external scratch-card app.
+SCRATCH_REWARD_SIGNING_SECRET = os.environ.get('SCRATCH_REWARD_SIGNING_SECRET', '').strip()

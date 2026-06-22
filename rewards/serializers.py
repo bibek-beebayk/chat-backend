@@ -1,3 +1,10 @@
+from decimal import Decimal
+from datetime import timezone as datetime_timezone
+import hmac
+import hashlib
+
+from django.conf import settings
+from django.utils import timezone
 from rest_framework import serializers
 from accounts.serializers import UserSerializer
 from .models import (
@@ -20,9 +27,79 @@ class LoginStreakEntrySerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ScratchRedemptionCreateSerializer(serializers.Serializer):
+    EXTERNAL_SOURCE_CHOICES = {'scratch', 'win'}
+
+    source = serializers.CharField(max_length=120)
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
+    reward_id = serializers.CharField(max_length=160)
+    expires = serializers.IntegerField()
+    signature = serializers.CharField(max_length=256)
+    hi_rollin_username = serializers.CharField(max_length=100)
+    query_params = serializers.JSONField(required=False)
+
+    def validate_source(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Source is required.')
+        if value not in self.EXTERNAL_SOURCE_CHOICES:
+            raise serializers.ValidationError('Unsupported reward source.')
+        return value
+
+    def validate_reward_id(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Reward id is required.')
+        return value
+
+    def validate_signature(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Signature is required.')
+        return value
+
+    def validate_hi_rollin_username(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError('Hi-Rollin account username is required.')
+        return value
+
+    def validate_query_params(self, value):
+        if value in (None, ''):
+            return {}
+        if not isinstance(value, dict):
+            raise serializers.ValidationError('Query params must be an object.')
+        return value
+
+    def validate(self, attrs):
+        secret = getattr(settings, 'SCRATCH_REWARD_SIGNING_SECRET', '')
+        if not secret:
+            raise serializers.ValidationError('Reward verification is not configured.')
+
+        expires_at = timezone.datetime.fromtimestamp(attrs['expires'], tz=datetime_timezone.utc)
+        if expires_at <= timezone.now():
+            raise serializers.ValidationError('This reward link has expired.')
+
+        amount_text = str(self.initial_data.get('amount', '')).strip()
+        message = f"{attrs['source']}|{amount_text}|{attrs['reward_id']}|{attrs['expires']}"
+        expected = hmac.new(
+            secret.encode('utf-8'),
+            message.encode('utf-8'),
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(expected, attrs['signature']):
+            raise serializers.ValidationError('Invalid reward signature.')
+
+        attrs['expires_at'] = expires_at
+        attrs['signed_message'] = message
+        return attrs
+
+
 class StreakRedemptionRequestSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     reviewed_by = UserSerializer(read_only=True)
+    source_label = serializers.CharField(source='get_source_display', read_only=True)
     status_label = serializers.CharField(source='get_status_display', read_only=True)
     verification_entries = serializers.SerializerMethodField()
     verification_summary = serializers.SerializerMethodField()
@@ -32,12 +109,15 @@ class StreakRedemptionRequestSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'user',
+            'source',
+            'source_label',
             'amount',
             'hi_rollin_username',
             'status',
             'status_label',
             'note',
             'staff_note',
+            'source_payload',
             'reviewed_by',
             'reviewed_at',
             'completed_at',
@@ -49,6 +129,8 @@ class StreakRedemptionRequestSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_verification_entries(self, obj):
+        if obj.source != StreakRedemptionRequest.SOURCE_LOGIN_STREAK:
+            return []
         requested_date = obj.created_at.date()
         entries = (
             LoginStreakEntry.objects
@@ -58,6 +140,14 @@ class StreakRedemptionRequestSerializer(serializers.ModelSerializer):
         return LoginStreakEntrySerializer(reversed(list(entries)), many=True).data
 
     def get_verification_summary(self, obj):
+        if obj.source != StreakRedemptionRequest.SOURCE_LOGIN_STREAK:
+            return {
+                'target_days': STREAK_TARGET_DAYS,
+                'record_count': 0,
+                'is_consecutive': False,
+                'start_date': None,
+                'end_date': None,
+            }
         entries = list(
             LoginStreakEntry.objects
             .filter(user=obj.user, login_date__lte=obj.created_at.date())
@@ -85,6 +175,8 @@ class LoginStreakStatusSerializer(serializers.ModelSerializer):
     reward_available = serializers.BooleanField(source='is_reward_available', read_only=True)
     active_redemption_request = serializers.SerializerMethodField()
     last_redemption_request = serializers.SerializerMethodField()
+    last_scratch_redemption_request = serializers.SerializerMethodField()
+    last_win_redemption_request = serializers.SerializerMethodField()
 
     class Meta:
         model = LoginStreak
@@ -99,6 +191,8 @@ class LoginStreakStatusSerializer(serializers.ModelSerializer):
             'reward_available',
             'active_redemption_request',
             'last_redemption_request',
+            'last_scratch_redemption_request',
+            'last_win_redemption_request',
         ]
         read_only_fields = fields
 
@@ -111,7 +205,33 @@ class LoginStreakStatusSerializer(serializers.ModelSerializer):
     def get_active_redemption_request(self, obj):
         request = (
             StreakRedemptionRequest.objects
-            .filter(user=obj.user, status__in=StreakRedemptionRequest.ACTIVE_STATUSES)
+            .filter(
+                user=obj.user,
+                source=StreakRedemptionRequest.SOURCE_LOGIN_STREAK,
+                status__in=StreakRedemptionRequest.ACTIVE_STATUSES,
+            )
+            .order_by('-created_at')
+            .first()
+        )
+        if not request:
+            return None
+        return StreakRedemptionRequestSerializer(request).data
+
+    def get_last_win_redemption_request(self, obj):
+        request = (
+            StreakRedemptionRequest.objects
+            .filter(user=obj.user, source=StreakRedemptionRequest.SOURCE_WIN_BONUS)
+            .order_by('-created_at')
+            .first()
+        )
+        if not request:
+            return None
+        return StreakRedemptionRequestSerializer(request).data
+
+    def get_last_scratch_redemption_request(self, obj):
+        request = (
+            StreakRedemptionRequest.objects
+            .filter(user=obj.user, source=StreakRedemptionRequest.SOURCE_SCRATCH_BONUS)
             .order_by('-created_at')
             .first()
         )
@@ -122,7 +242,7 @@ class LoginStreakStatusSerializer(serializers.ModelSerializer):
     def get_last_redemption_request(self, obj):
         request = (
             StreakRedemptionRequest.objects
-            .filter(user=obj.user)
+            .filter(user=obj.user, source=StreakRedemptionRequest.SOURCE_LOGIN_STREAK)
             .order_by('-created_at')
             .first()
         )
