@@ -10,7 +10,11 @@ from .serializers import (
     RedemptionStatusUpdateSerializer,
     StreakRedemptionRequestSerializer,
 )
-from .services import clear_streak_after_redemption, record_daily_visit
+from .services import (
+    clear_streak_after_redemption,
+    expire_stale_streak,
+    record_daily_visit,
+)
 
 
 def _is_staff_user(user):
@@ -20,7 +24,7 @@ def _is_staff_user(user):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def streak_status_view(request):
-    streak, _ = LoginStreak.objects.get_or_create(user=request.user)
+    streak = expire_stale_streak(request.user)
     return Response(LoginStreakStatusSerializer(streak).data)
 
 
@@ -43,7 +47,7 @@ def create_redemption_request_view(request):
     serializer.is_valid(raise_exception=True)
 
     with transaction.atomic():
-        streak, _ = LoginStreak.objects.select_for_update().get_or_create(user=request.user)
+        streak = expire_stale_streak(request.user)
         if streak.receivable_bonus < STREAK_REWARD_AMOUNT:
             return Response({'error': 'No streak bonus is currently available to redeem.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -62,6 +66,7 @@ def create_redemption_request_view(request):
         redeem_request = StreakRedemptionRequest.objects.create(
             user=request.user,
             amount=streak.receivable_bonus,
+            hi_rollin_username=serializer.validated_data['hi_rollin_username'],
             note=serializer.validated_data.get('note', ''),
         )
 
@@ -104,11 +109,19 @@ def redemption_request_update_view(request, request_id):
             return Response({'error': 'This request is already completed.'}, status=status.HTTP_400_BAD_REQUEST)
         if redeem_request.status == StreakRedemptionRequest.STATUS_REJECTED:
             return Response({'error': 'This request is already rejected.'}, status=status.HTTP_400_BAD_REQUEST)
-        if new_status == StreakRedemptionRequest.STATUS_COMPLETED and redeem_request.status not in (
-            StreakRedemptionRequest.STATUS_PENDING,
-            StreakRedemptionRequest.STATUS_APPROVED,
-        ):
+        if redeem_request.status == StreakRedemptionRequest.STATUS_PENDING and new_status == StreakRedemptionRequest.STATUS_COMPLETED:
+            return Response({'error': 'Approve this request before completing it.'}, status=status.HTTP_400_BAD_REQUEST)
+        if redeem_request.status == StreakRedemptionRequest.STATUS_APPROVED and new_status != StreakRedemptionRequest.STATUS_COMPLETED:
+            return Response({'error': 'Approved requests can only be completed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_status == StreakRedemptionRequest.STATUS_COMPLETED and redeem_request.status != StreakRedemptionRequest.STATUS_APPROVED:
             return Response({'error': 'This request cannot be completed.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_status == StreakRedemptionRequest.STATUS_COMPLETED:
+            streak = expire_stale_streak(redeem_request.user)
+            if streak.receivable_bonus < redeem_request.amount:
+                return Response(
+                    {'error': 'This player no longer has an active 7-day streak bonus.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         redeem_request.mark_reviewed(request.user, new_status, staff_note)
         redeem_request.save(update_fields=['status', 'staff_note', 'reviewed_by', 'reviewed_at', 'completed_at', 'updated_at'])

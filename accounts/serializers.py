@@ -26,6 +26,7 @@ class UserSerializer(serializers.ModelSerializer):
             'email',
             'first_name',
             'last_name',
+            'external_user_id',
             'verification_status',
             'profile_picture',
             'profile_thumbnail',

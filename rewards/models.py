@@ -77,6 +77,7 @@ class StreakRedemptionRequest(models.Model):
         related_name='streak_redemption_requests',
     )
     amount = models.DecimalField(max_digits=8, decimal_places=2, default=STREAK_REWARD_AMOUNT)
+    hi_rollin_username = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
     note = models.TextField(blank=True)
     staff_note = models.TextField(blank=True)
