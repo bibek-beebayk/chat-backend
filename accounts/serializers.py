@@ -63,6 +63,22 @@ class UserSerializer(serializers.ModelSerializer):
         return self.get_profile_thumbnail(obj) or self.get_profile_picture(obj)
 
 
+class StaffUserListSerializer(UserSerializer):
+    """User details exposed to staff user-management screens."""
+
+    joined_at = serializers.DateTimeField(source='date_joined', read_only=True)
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + [
+            'is_active',
+            'is_staff',
+            'is_superuser',
+            'joined_at',
+            'last_login',
+        ]
+        read_only_fields = fields
+
+
 class RegisterSerializer(serializers.ModelSerializer):
     """Serializer for user registration."""
     password = serializers.CharField(write_only=True, min_length=6)

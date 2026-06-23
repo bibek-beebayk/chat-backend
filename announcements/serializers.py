@@ -6,13 +6,11 @@ from chat_project.content_utils import normalize_signed_media_urls
 
 class AnnouncementSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
-    content = serializers.SerializerMethodField()
+    content = serializers.CharField(required=False, allow_blank=True)
+    cover_image = serializers.ImageField(required=False, allow_null=True)
     category_label = serializers.CharField(source='get_category_display', read_only=True)
     audience_label = serializers.CharField(source='get_audience_display', read_only=True)
     priority_label = serializers.CharField(source='get_priority_display', read_only=True)
-
-    def get_content(self, obj):
-        return normalize_signed_media_urls(obj.content or '')
 
     class Meta:
         model = Announcement
@@ -29,9 +27,23 @@ class AnnouncementSerializer(serializers.ModelSerializer):
             'priority',
             'priority_label',
             'is_pinned',
+            'is_published',
             'published_at',
             'created_by',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = fields
+        read_only_fields = [
+            'id',
+            'category_label',
+            'audience_label',
+            'priority_label',
+            'created_by',
+            'created_at',
+            'updated_at',
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['content'] = normalize_signed_media_urls(instance.content or '')
+        return data

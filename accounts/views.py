@@ -22,6 +22,7 @@ from .serializers import (
     CurrentPasswordSerializer,
     AgentAvailabilityUpdateSerializer,
     GoogleLoginSerializer,
+    StaffUserListSerializer,
 )
 from .models import (
     EmailVerificationOTP,
@@ -33,6 +34,10 @@ from chat_project.utils import send_zeptomail, search_player
 from rewards.services import record_daily_visit
 
 User = get_user_model()
+
+
+def _is_staff_user(user):
+    return bool(user and user.is_authenticated and getattr(user, 'user_type', None) == 'staff')
 
 
 def send_otp_email(user, otp_code):
@@ -255,6 +260,80 @@ def current_user_view(request):
         UserSerializer(request.user, context={'request': request}).data,
         status=status.HTTP_200_OK
     )
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def staff_users_view(request):
+    """
+    Return a filterable user-management list for staff users.
+    """
+    if not _is_staff_user(request.user):
+        return Response(
+            {'error': 'Only staff users can view user management.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    queryset = User.objects.all().order_by('-date_joined', 'username')
+    user_type = request.query_params.get('user_type', '').strip()
+    status_filter = request.query_params.get('status', '').strip()
+    search = request.query_params.get('search', '').strip()
+
+    if user_type in {'player', 'agent', 'staff'}:
+        queryset = queryset.filter(user_type=user_type)
+
+    if status_filter == 'active':
+        queryset = queryset.filter(is_active=True)
+    elif status_filter == 'inactive':
+        queryset = queryset.filter(is_active=False)
+    elif status_filter == 'verified':
+        queryset = queryset.filter(is_verified=True)
+    elif status_filter == 'unverified':
+        queryset = queryset.filter(is_verified=False)
+    elif status_filter == 'test':
+        queryset = queryset.filter(is_test_user=True)
+
+    if search:
+        queryset = queryset.filter(
+            Q(username__icontains=search)
+            | Q(email__icontains=search)
+            | Q(first_name__icontains=search)
+            | Q(last_name__icontains=search)
+            | Q(external_user_id__icontains=search)
+        )
+
+    try:
+        limit = min(max(int(request.query_params.get('limit', 50)), 1), 100)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        offset = max(int(request.query_params.get('offset', 0)), 0)
+    except (TypeError, ValueError):
+        offset = 0
+
+    total_count = queryset.count()
+    users = queryset[offset:offset + limit]
+    stats_queryset = User.objects.all()
+    stats = {
+        'total': stats_queryset.count(),
+        'players': stats_queryset.filter(user_type='player').count(),
+        'agents': stats_queryset.filter(user_type='agent').count(),
+        'staff': stats_queryset.filter(user_type='staff').count(),
+        'active': stats_queryset.filter(is_active=True).count(),
+        'verified': stats_queryset.filter(is_verified=True).count(),
+        'test': stats_queryset.filter(is_test_user=True).count(),
+    }
+
+    return Response({
+        'results': StaffUserListSerializer(users, many=True, context={'request': request}).data,
+        'meta': {
+            'count': total_count,
+            'limit': limit,
+            'offset': offset,
+            'has_more': offset + limit < total_count,
+        },
+        'stats': stats,
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
