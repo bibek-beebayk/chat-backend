@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 from analytics.models import ActivityEvent
@@ -14,6 +14,37 @@ def create_activity(actor, kind, action, target_title='', target_url='', metadat
         target_url=target_url or '',
         metadata=metadata or {},
     )
+
+
+def get_redemption_activity_details(redemption):
+    amount = f'${redemption.amount}'
+    source = getattr(redemption, 'source', '')
+
+    source_map = {
+        'login_streak': {
+            'label': 'Login Streak Credit',
+            'action_label': 'login streak credit',
+        },
+        'scratch_bonus': {
+            'label': 'Scratch Bonus',
+            'action_label': 'scratch bonus',
+        },
+        'win_bonus': {
+            'label': 'Win Bonus',
+            'action_label': 'win bonus',
+        },
+    }
+    details = source_map.get(source, {
+        'label': redemption.get_source_display() if hasattr(redemption, 'get_source_display') else 'Bonus',
+        'action_label': 'bonus',
+    })
+
+    return {
+        'source': source,
+        'label': details['label'],
+        'action_label': details['action_label'],
+        'target_title': f'{amount} {details["label"]}',
+    }
 
 
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
@@ -61,14 +92,47 @@ def record_event_registration(sender, instance, created, **kwargs):
         )
 
 
+@receiver(pre_save, sender='rewards.StreakRedemptionRequest')
+def cache_redemption_previous_status(sender, instance, **kwargs):
+    if not instance.pk:
+        instance._previous_status = None
+        return
+
+    previous = sender.objects.filter(pk=instance.pk).values('status').first()
+    instance._previous_status = previous['status'] if previous else None
+
+
 @receiver(post_save, sender='rewards.StreakRedemptionRequest')
 def record_streak_redemption_request(sender, instance, created, **kwargs):
+    details = get_redemption_activity_details(instance)
     if created:
         create_activity(
             instance.user,
             ActivityEvent.KIND_REWARD,
-            'requested a streak credit redemption',
-            target_title='$5 Hi-Rollin credit',
+            f'requested a {details["action_label"]} redemption',
+            target_title=details['target_title'],
             target_url='/settings',
-            metadata={'redemption_request_id': instance.id, 'amount': str(instance.amount)},
+            metadata={
+                'redemption_request_id': instance.id,
+                'amount': str(instance.amount),
+                'source': details['source'],
+                'status': instance.status,
+            },
+        )
+        return
+
+    previous_status = getattr(instance, '_previous_status', None)
+    if previous_status != instance.status and instance.status == 'approved':
+        create_activity(
+            instance.user,
+            ActivityEvent.KIND_REWARD,
+            f'had a {details["action_label"]} redemption accepted',
+            target_title=details['target_title'],
+            target_url='/settings',
+            metadata={
+                'redemption_request_id': instance.id,
+                'amount': str(instance.amount),
+                'source': details['source'],
+                'status': instance.status,
+            },
         )
