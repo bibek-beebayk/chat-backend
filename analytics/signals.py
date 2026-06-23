@@ -3,6 +3,8 @@ from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 from analytics.models import ActivityEvent
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event
 
 
 def create_activity(actor, kind, action, target_title='', target_url='', metadata=None):
@@ -90,6 +92,13 @@ def record_event_registration(sender, instance, created, **kwargs):
             target_url=f'/events/{instance.event_id}',
             metadata={'event_id': instance.event_id},
         )
+        track_event(
+            user=instance.user,
+            event_type=AnalyticsEvent.EVENT_EVENT_REGISTRATION,
+            event_name='event_registration',
+            path=f'/events/{instance.event_id}',
+            metadata={'event_id': instance.event_id, 'event_title': instance.event.title},
+        )
 
 
 @receiver(pre_save, sender='rewards.StreakRedemptionRequest')
@@ -106,6 +115,19 @@ def cache_redemption_previous_status(sender, instance, **kwargs):
 def record_streak_redemption_request(sender, instance, created, **kwargs):
     details = get_redemption_activity_details(instance)
     if created:
+        track_event(
+            user=instance.user,
+            event_type=AnalyticsEvent.EVENT_REDEMPTION,
+            event_name='redemption_requested',
+            path='/settings',
+            source=details['source'],
+            metadata={
+                'redemption_request_id': instance.id,
+                'amount': str(instance.amount),
+                'source': details['source'],
+                'status': instance.status,
+            },
+        )
         create_activity(
             instance.user,
             ActivityEvent.KIND_REWARD,
@@ -123,6 +145,19 @@ def record_streak_redemption_request(sender, instance, created, **kwargs):
 
     previous_status = getattr(instance, '_previous_status', None)
     if previous_status != instance.status and instance.status == 'approved':
+        track_event(
+            user=instance.user,
+            event_type=AnalyticsEvent.EVENT_REDEMPTION,
+            event_name='redemption_approved',
+            path='/settings',
+            source=details['source'],
+            metadata={
+                'redemption_request_id': instance.id,
+                'amount': str(instance.amount),
+                'source': details['source'],
+                'status': instance.status,
+            },
+        )
         create_activity(
             instance.user,
             ActivityEvent.KIND_REWARD,

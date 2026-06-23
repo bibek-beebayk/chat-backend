@@ -3,6 +3,8 @@ from django.contrib.auth import get_user_model
 from .models import HomeInfoSection, HomeInfoPoint
 from chat_project.url_utils import build_public_absolute_uri
 from rewards.services import record_daily_visit
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event
 
 User = get_user_model()
 
@@ -148,6 +150,14 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         data = super().validate(attrs)
         record_daily_visit(self.user)
+        request = self.context.get('request')
+        track_event(
+            request=request,
+            user=self.user,
+            event_type=AnalyticsEvent.EVENT_LOGIN,
+            event_name='password_login',
+            metadata={'method': 'password'},
+        )
 
         data['user'] = UserSerializer(
             self.user,

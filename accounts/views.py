@@ -32,6 +32,8 @@ from .models import (
 )
 from chat_project.utils import send_zeptomail, search_player
 from rewards.services import record_daily_visit
+from analytics.models import AnalyticsEvent
+from analytics.services import track_event
 
 User = get_user_model()
 
@@ -78,6 +80,13 @@ def register_view(request):
     serializer = RegisterSerializer(data=request.data)
     if serializer.is_valid():
         user = serializer.save()
+        track_event(
+            request=request,
+            user=user,
+            event_type=AnalyticsEvent.EVENT_REGISTER,
+            event_name='registration_created',
+            metadata={'user_type': user.user_type, 'email_sent': None},
+        )
         
         # Generate OTP
         otp_code = EmailVerificationOTP.generate_otp()
@@ -126,6 +135,13 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 def _build_jwt_login_response(user, request, message='Login successful.'):
     record_daily_visit(user)
+    track_event(
+        request=request,
+        user=user,
+        event_type=AnalyticsEvent.EVENT_LOGIN,
+        event_name='google_login',
+        metadata={'method': 'google'},
+    )
     refresh = RefreshToken.for_user(user)
     return {
         'message': message,
@@ -223,6 +239,15 @@ def google_login_view(request):
         if update_fields:
             user.save(update_fields=update_fields)
 
+    if created:
+        track_event(
+            request=request,
+            user=user,
+            event_type=AnalyticsEvent.EVENT_REGISTER,
+            event_name='google_registration',
+            metadata={'user_type': user.user_type, 'method': 'google'},
+        )
+
     return Response(
         _build_jwt_login_response(
             user,
@@ -246,6 +271,12 @@ def logout_view(request):
             
         token = RefreshToken(refresh_token)
         token.blacklist()
+        track_event(
+            request=request,
+            user=request.user,
+            event_type=AnalyticsEvent.EVENT_LOGOUT,
+            event_name='logout',
+        )
         return Response({'message': 'Logout successful'}, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -763,6 +794,13 @@ def verify_otp_view(request):
     # OTP is valid - activate user (but keep unverified until user ID verification)
     user.is_active = True
     user.save()
+    track_event(
+        request=request,
+        user=user,
+        event_type=AnalyticsEvent.EVENT_REGISTER,
+        event_name='email_verified',
+        metadata={'user_type': user.user_type},
+    )
     
     # Mark OTP as used
     otp_record.is_used = True
