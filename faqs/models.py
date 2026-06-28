@@ -5,6 +5,7 @@ from ckeditor_uploader.fields import RichTextUploadingField
 
 
 class FAQ(models.Model):
+    CATEGORY_GENERAL = 'general'
     CATEGORY_ACCOUNT = 'account'
     CATEGORY_COMMUNITY = 'community'
     CATEGORY_REWARDS = 'rewards'
@@ -12,6 +13,7 @@ class FAQ(models.Model):
     CATEGORY_SECURITY = 'security'
     CATEGORY_TECHNICAL = 'technical'
     CATEGORY_CHOICES = [
+        (CATEGORY_GENERAL, 'General'),
         (CATEGORY_ACCOUNT, 'Account'),
         (CATEGORY_COMMUNITY, 'Community'),
         (CATEGORY_REWARDS, 'Rewards'),
@@ -33,7 +35,7 @@ class FAQ(models.Model):
 
     question = models.CharField(max_length=260)
     answer = RichTextUploadingField()
-    category = models.CharField(max_length=24, choices=CATEGORY_CHOICES, default=CATEGORY_ACCOUNT)
+    category = models.CharField(max_length=24, choices=CATEGORY_CHOICES, default=CATEGORY_GENERAL)
     audience = models.CharField(max_length=16, choices=AUDIENCE_CHOICES, default=AUDIENCE_ALL)
     sort_order = models.PositiveIntegerField(default=0)
     is_featured = models.BooleanField(default=False)
