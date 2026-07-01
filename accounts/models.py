@@ -45,6 +45,10 @@ class User(AbstractUser):
         default=False,
         help_text='Designates whether this account is isolated to test support rooms.'
     )
+    needs_username_setup = models.BooleanField(
+        default=False,
+        help_text='Designates whether the user should choose a public username.',
+    )
     external_user_id = models.CharField(
         max_length=100,
         blank=True,

@@ -20,6 +20,7 @@ from .serializers import (
     EmailChangeRequestSerializer,
     EmailChangeVerifySerializer,
     CurrentPasswordSerializer,
+    UsernameUpdateSerializer,
     AgentAvailabilityUpdateSerializer,
     GoogleLoginSerializer,
     StaffUserListSerializer,
@@ -223,6 +224,7 @@ def google_login_view(request):
                 user_type='player',
                 first_name=(token_info.get('given_name') or '')[:150],
                 last_name=(token_info.get('family_name') or '')[:150],
+                needs_username_setup=True,
             )
             created = True
 
@@ -426,6 +428,40 @@ def update_profile_picture_view(request):
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+def update_username_view(request):
+    serializer = UsernameUpdateSerializer(
+        data=request.data,
+        context={'request': request},
+    )
+    if not serializer.is_valid():
+        first_error = next(iter(serializer.errors.values()), ['Invalid username.'])
+        if isinstance(first_error, list) and first_error:
+            error_message = str(first_error[0])
+        else:
+            error_message = 'Invalid username.'
+        return Response(
+            {
+                'error': error_message,
+                'errors': serializer.errors,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user = request.user
+    user.username = serializer.validated_data['username']
+    user.needs_username_setup = False
+    user.save(update_fields=['username', 'needs_username_setup'])
+    return Response(
+        {
+            'message': 'Username updated successfully.',
+            'user': UserSerializer(user, context={'request': request}).data,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
 def request_email_change_view(request):
     serializer = EmailChangeRequestSerializer(data=request.data)
     if not serializer.is_valid():
@@ -566,7 +602,7 @@ def change_password_view(request):
     serializer = ChangePasswordSerializer(data=request.data)
     if serializer.is_valid():
         user = request.user
-        if not user.check_password(serializer.data.get('old_password')):
+        if user.has_usable_password() and not user.check_password(serializer.data.get('old_password', '')):
             return Response(
                 {'old_password': ['Wrong password.']}, 
                 status=status.HTTP_400_BAD_REQUEST
@@ -576,7 +612,10 @@ def change_password_view(request):
         user.save()
         
         return Response(
-            {'message': 'Password changed successfully'},
+            {
+                'message': 'Password changed successfully',
+                'user': UserSerializer(user, context={'request': request}).data,
+            },
             status=status.HTTP_200_OK
         )
         

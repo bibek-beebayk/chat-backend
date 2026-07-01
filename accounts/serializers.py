@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.contrib.auth import get_user_model
 from .models import HomeInfoSection, HomeInfoPoint
 from chat_project.url_utils import build_public_absolute_uri
@@ -16,6 +17,7 @@ class UserSerializer(serializers.ModelSerializer):
     profile_picture = serializers.SerializerMethodField()
     profile_thumbnail = serializers.SerializerMethodField()
     avatar = serializers.SerializerMethodField()
+    has_usable_password = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -33,6 +35,8 @@ class UserSerializer(serializers.ModelSerializer):
             'profile_picture',
             'profile_thumbnail',
             'avatar',
+            'has_usable_password',
+            'needs_username_setup',
             'agent_availability',
             'agent_status_note',
         ]
@@ -63,6 +67,9 @@ class UserSerializer(serializers.ModelSerializer):
     def get_avatar(self, obj):
         # Backward-compatible alias used by older app clients.
         return self.get_profile_thumbnail(obj) or self.get_profile_picture(obj)
+
+    def get_has_usable_password(self, obj):
+        return obj.has_usable_password()
 
 
 class StaffUserListSerializer(UserSerializer):
@@ -168,7 +175,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     """Serializer for password change."""
-    old_password = serializers.CharField(required=True)
+    old_password = serializers.CharField(required=False, allow_blank=True)
     new_password = serializers.CharField(required=True, min_length=6)
     confirm_new_password = serializers.CharField(required=True)
     
@@ -180,6 +187,26 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class CurrentPasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(required=True, trim_whitespace=False)
+
+
+class UsernameUpdateSerializer(serializers.Serializer):
+    username = serializers.CharField(
+        required=True,
+        min_length=3,
+        max_length=150,
+        validators=[UnicodeUsernameValidator()],
+    )
+
+    def validate_username(self, value):
+        username = value.strip()
+        if not username:
+            raise serializers.ValidationError('Username cannot be empty.')
+
+        user = self.context['request'].user
+        queryset = User.objects.filter(username__iexact=username).exclude(pk=user.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('This username is already taken.')
+        return username
 
 
 class AgentAvailabilityUpdateSerializer(serializers.Serializer):
