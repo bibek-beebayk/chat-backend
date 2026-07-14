@@ -40,6 +40,68 @@ class UserAdmin(admin.ModelAdmin):
     search_fields = ['username', 'email', 'external_user_id']
     # readonly_fields = ['external_user_id']
     ordering = ['-date_joined']
+    actions = ['export_users_to_csv']
+
+    def export_users_to_csv(self, request, queryset):
+        import csv
+        from django.http import HttpResponse
+        from django.shortcuts import render
+
+        # Define the available fields
+        available_fields = [
+            ('id', 'ID'),
+            ('username', 'Username'),
+            ('email', 'Email'),
+            ('user_type', 'User Type'),
+            ('external_user_id', 'External ID'),
+            ('is_verified', 'Is Verified'),
+            ('is_active', 'Is Active'),
+            ('date_joined', 'Date Joined'),
+        ]
+
+        if 'apply_export' in request.POST:
+            selected_field_names = request.POST.getlist('export_fields')
+            
+            # Create a dictionary for quick lookup of field labels
+            field_dict = dict(available_fields)
+            
+            # Filter selected fields to only those that are valid
+            valid_fields = [f for f in selected_field_names if f in field_dict]
+            
+            if not valid_fields:
+                self.message_user(request, "No fields selected for export.", level='WARNING')
+                return None
+                
+            response = HttpResponse(content_type='text/csv')
+            response['Content-Disposition'] = 'attachment; filename="users_export.csv"'
+
+            writer = csv.writer(response)
+            
+            # Write headers
+            headers = [field_dict[f] for f in valid_fields]
+            writer.writerow(headers)
+
+            for user in queryset:
+                row = []
+                for field_name in valid_fields:
+                    if field_name == 'user_type':
+                        row.append(user.get_user_type_display())
+                    elif field_name == 'date_joined':
+                        row.append(user.date_joined.strftime('%Y-%m-%d %H:%M:%S') if user.date_joined else '')
+                    else:
+                        row.append(getattr(user, field_name, ''))
+                writer.writerow(row)
+                
+            return response
+            
+        context = {
+            **self.admin_site.each_context(request),
+            'title': 'Export Users to CSV',
+            'queryset': queryset,
+            'export_fields': available_fields,
+        }
+        return render(request, "admin/accounts/user/export_users_intermediate.html", context)
+    export_users_to_csv.short_description = "Export selected users to CSV"
 
     def save_model(self, request, obj, form, change):
         if obj.pk:

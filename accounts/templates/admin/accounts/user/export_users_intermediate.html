@@ -1,0 +1,32 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<form action="" method="post">
+    {% csrf_token %}
+    <p>{% blocktranslate %}Please select the fields you want to export to CSV for the selected users:{% endblocktranslate %}</p>
+    
+    <fieldset class="module aligned">
+        {% for field_name, field_label in export_fields %}
+        <div class="form-row">
+            <div>
+                <input type="checkbox" name="export_fields" value="{{ field_name }}" id="id_{{ field_name }}">
+                <label for="id_{{ field_name }}" class="vCheckboxLabel">{{ field_label }}</label>
+            </div>
+        </div>
+        {% endfor %}
+    </fieldset>
+
+    {% for obj in queryset %}
+    <input type="hidden" name="_selected_action" value="{{ obj.pk }}" />
+    {% endfor %}
+    <input type="hidden" name="action" value="export_users_to_csv" />
+    <input type="hidden" name="apply_export" value="yes" />
+    
+    <div>
+        <br/>
+        <input type="submit" value="{% translate 'Export CSV' %}" />
+        <a href="#" onclick="window.history.back(); return false;" class="button cancel-link">{% translate "Cancel" %}</a>
+    </div>
+</form>
+{% endblock %}
