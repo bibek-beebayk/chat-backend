@@ -27,12 +27,15 @@ class PlinkoMultiplierTableTests(TestCase):
 
     def test_bias_worst_case_ev_stays_safe(self):
         """
-        Regression guard: only the first BIAS_ROWS bounces are biased toward the
-        drop side (the rest stay fair), which is what keeps this safe - biasing
-        every row instead lets a player push several tables well past 100% RTP
-        with only a few points of shift (verified by hand during planning).
-        This recomputes the exact worst-case EV at maximum bias across every
-        table and asserts it stays comfortably under 1.0.
+        Regression guard for generate_path()'s bias math in isolation. This is
+        no longer a live threat model - play_round() always calls
+        generate_path(rows, 0.0) regardless of what drop_offset a client
+        sends (see services.py), so this scenario can't actually happen
+        through the API today. It's kept as a defense-in-depth property: if
+        play_round() ever passes a real client offset through again, the
+        underlying math must still guarantee the house can't net negative
+        even at maximum drag. Threshold is 1.0 (break-even), not the tighter
+        margin used back when this was a reachable path.
         """
         biased_p = 0.5 + MAX_BIAS
 
@@ -59,7 +62,7 @@ class PlinkoMultiplierTableTests(TestCase):
                     worst = ev
                     worst_id = (rows, risk_level)
 
-        self.assertLess(worst, 0.99, f'Worst-case biased EV too high: {worst} ({worst_id})')
+        self.assertLess(worst, 1.0, f'Worst-case biased EV too high: {worst} ({worst_id})')
 
 
 class PlinkoServiceTests(TestCase):
@@ -78,9 +81,20 @@ class PlinkoServiceTests(TestCase):
             round_obj = play_round(self.user, rows=8, risk_level='low', wager_amount=100)
 
         self.assertEqual(round_obj.slot_index, 8)
-        self.assertEqual(round_obj.multiplier, Decimal('5.49'))
-        self.assertEqual(round_obj.payout_amount, 549)  # round_half_up(100 * 5.49)
+        self.assertEqual(round_obj.multiplier, Decimal('5.57'))
+        self.assertEqual(round_obj.payout_amount, Decimal('557.00'))  # 100 * 5.57, exact to 2dp
         self.assertEqual(round_obj.path, [1] * 8)
+
+    def test_payout_keeps_fractional_cents_instead_of_rounding_to_whole_points(self):
+        # A wager whose product with the multiplier isn't a whole number is
+        # the actual regression this covers - e.g. a 5-point wager at a
+        # 1.1x multiplier settles at 5.50, not rounded to 5 or 6.
+        with mock.patch('plinko.services.generate_path', return_value=[1, 1, 0, 0, 0, 0, 0, 0]):
+            round_obj = play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+
+        self.assertEqual(round_obj.slot_index, 2)
+        self.assertEqual(round_obj.multiplier, Decimal('1.1'))
+        self.assertEqual(round_obj.payout_amount, Decimal('5.50'))
 
     def test_ledger_entry_created_with_expected_delta_and_metadata(self):
         with mock.patch('plinko.services.generate_path', return_value=[0] * 8):
@@ -131,6 +145,17 @@ class PlinkoServiceTests(TestCase):
             round_obj = play_round(self.user, rows=8, risk_level='low', wager_amount=10, drop_offset=5.0)
         self.assertEqual(round_obj.drop_offset, 1.0)
 
+    def test_drop_offset_no_longer_influences_path_generation(self):
+        # The actual fix this covers: play_round() must always call
+        # generate_path(rows, 0.0) regardless of what drop_offset a client
+        # sends - only the stored/echoed field should reflect the clamped
+        # value now (see services.py for why: the drag-to-bias mechanic this
+        # powered no longer exists in the frontend physics, so honoring a
+        # nonzero offset here would just be a dormant EV exploit).
+        with mock.patch('plinko.services.generate_path', wraps=generate_path) as spy:
+            play_round(self.user, rows=8, risk_level='low', wager_amount=5, drop_offset=1.0)
+        spy.assert_called_once_with(8, 0.0)
+
 
 class PlinkoViewTests(TestCase):
     def setUp(self):
@@ -152,10 +177,17 @@ class PlinkoViewTests(TestCase):
 
     def test_wager_exceeding_balance_is_rejected(self):
         self.client.force_authenticate(user=self.player)
-        response = self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 100000})
+        PointsBalance.objects.filter(user=self.player).update(balance=3)  # below the smallest wager option (5)
+        response = self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 5})
         self.assertEqual(response.status_code, 400)
         self.assertEqual(PlinkoRound.objects.count(), 0)
-        self.assertEqual(PointsBalance.objects.get(user=self.player).balance, 1000)
+        self.assertEqual(PointsBalance.objects.get(user=self.player).balance, 3)
+
+    def test_wager_outside_fixed_options_is_rejected(self):
+        self.client.force_authenticate(user=self.player)
+        response = self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 7})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(PlinkoRound.objects.count(), 0)
 
     def test_only_players_can_play(self):
         self.client.force_authenticate(user=self.staff)
@@ -171,7 +203,8 @@ class PlinkoViewTests(TestCase):
         response = self.client.get(reverse('plinko-config'))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['rows_options'], [8])
-        self.assertEqual(response.data['multipliers'][8]['low'][0], 5.49)
+        self.assertEqual(response.data['wager_options'], [5, 10])
+        self.assertEqual(response.data['multipliers'][8]['low'][0], 5.57)
 
     def test_deactivated_game_blocks_play_via_api(self):
         Game.objects.filter(slug='plinko').update(is_active=False)
@@ -183,7 +216,7 @@ class PlinkoViewTests(TestCase):
 
     def test_successful_play_returns_round_and_updates_balance(self):
         self.client.force_authenticate(user=self.player)
-        response = self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 100})
+        response = self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 10})
         self.assertEqual(response.status_code, 201)
         self.assertIn('slot_index', response.data)
         self.assertEqual(PlinkoRound.objects.filter(user=self.player).count(), 1)

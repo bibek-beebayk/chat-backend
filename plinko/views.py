@@ -2,7 +2,7 @@ from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from points.services import InsufficientPoints
-from .constants import MAX_WAGER, MIN_WAGER, MULTIPLIER_TABLES, RISK_CHOICES, ROWS_CHOICES
+from .constants import MULTIPLIER_TABLES, RISK_CHOICES, ROWS_CHOICES, WAGER_OPTIONS
 from .models import PlinkoRound
 from .serializers import PlinkoPlayRequestSerializer, PlinkoRoundSerializer
 from .services import GameUnavailable, play_round
@@ -15,8 +15,7 @@ def config_view(request):
         'rows_options': list(ROWS_CHOICES),
         'risk_options': list(RISK_CHOICES),
         'multipliers': MULTIPLIER_TABLES,
-        'min_wager': MIN_WAGER,
-        'max_wager': MAX_WAGER,
+        'wager_options': list(WAGER_OPTIONS),
     })
 
 

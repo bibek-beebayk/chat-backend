@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -27,7 +29,13 @@ class PointsBalance(models.Model):
         on_delete=models.CASCADE,
         related_name='points_balance',
     )
-    balance = models.PositiveIntegerField(default=0)
+    # Decimal (not PositiveIntegerField) so fractional payouts - e.g. a 10-point
+    # Plinko wager at a 1.08x multiplier settling at 10.80 - persist exactly
+    # instead of being rounded away. No Django PositiveDecimalField exists;
+    # staying non-negative is enforced at the application layer (see
+    # InsufficientPoints in points/services.py), matching the precedent set by
+    # rewards.LoginStreak.receivable_bonus (also a plain DecimalField).
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     lifetime_earned = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -71,8 +79,8 @@ class PointsLedgerEntry(models.Model):
         related_name='points_ledger_entries',
     )
     entry_type = models.CharField(max_length=24, choices=ENTRY_TYPE_CHOICES)
-    delta = models.IntegerField()
-    balance_after = models.PositiveIntegerField()
+    delta = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
     action = models.ForeignKey(
         PointAction,
         on_delete=models.PROTECT,
@@ -114,7 +122,8 @@ class PointsLedgerEntry(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.user} {self.entry_type} {self.delta:+d}'
+        sign = '+' if self.delta >= 0 else ''
+        return f'{self.user} {self.entry_type} {sign}{self.delta}'
 
 
 class PointsRedemptionRequest(models.Model):

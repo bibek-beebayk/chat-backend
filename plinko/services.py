@@ -38,13 +38,19 @@ def play_round(user, *, rows, risk_level, wager_amount, drop_offset=0.0):
     if not game or not game.is_active:
         raise GameUnavailable()
 
+    # drop_offset is still accepted, clamped, stored, and echoed back for API
+    # backwards compatibility, but no longer feeds into path generation - the
+    # drag-to-bias mechanic it powered was replaced by a fixed center drop
+    # when the board moved to real Matter.js physics (which has no concept
+    # of a drop position at all), so honoring a client-supplied value here
+    # would just reopen an EV-exploitable path with no product benefit.
+    # generate_path() itself still supports biasing (see test coverage in
+    # tests.py) in case this ever needs to be reactivated deliberately.
     offset = max(-1.0, min(1.0, drop_offset))
-    path = generate_path(rows, offset)
+    path = generate_path(rows, 0.0)
     slot_index = sum(path)
     multiplier = Decimal(str(get_multiplier_table(rows, risk_level)[slot_index]))
-    payout_amount = int(
-        (Decimal(wager_amount) * multiplier).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-    )
+    payout_amount = (Decimal(wager_amount) * multiplier).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     balance, ledger_entry = settle_wager(
         user,
@@ -56,8 +62,14 @@ def play_round(user, *, rows, risk_level, wager_amount, drop_offset=0.0):
             'risk_level': risk_level,
             'slot_index': slot_index,
             'multiplier': str(multiplier),
-            'wager_amount': wager_amount,
-            'payout_amount': payout_amount,
+            # Decimal isn't JSON-serializable by default (plain JSONField,
+            # not DjangoJSONEncoder) - stringify like multiplier above.
+            # wager_amount is normally a plain int (the API only ever passes
+            # 5 or 10), but play_round() is a general service function and a
+            # caller can legitimately pass a Decimal (e.g. a partial-balance
+            # wager), so stringify defensively rather than assuming the type.
+            'wager_amount': str(wager_amount),
+            'payout_amount': str(payout_amount),
         },
         note=f'Plinko round: {rows} rows, {risk_level} risk, landed slot {slot_index} (x{multiplier})',
     )

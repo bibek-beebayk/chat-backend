@@ -22,10 +22,10 @@ class PlinkoRound(models.Model):
     wager_amount = models.PositiveIntegerField()
     slot_index = models.PositiveSmallIntegerField()
     multiplier = models.DecimalField(max_digits=8, decimal_places=2)
-    payout_amount = models.PositiveIntegerField()
+    payout_amount = models.DecimalField(max_digits=12, decimal_places=2)
     path = models.JSONField()
     drop_offset = models.FloatField(default=0.0)
-    balance_after = models.PositiveIntegerField()
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
     ledger_entry = models.OneToOneField(
         'points.PointsLedgerEntry',
         on_delete=models.SET_NULL,
