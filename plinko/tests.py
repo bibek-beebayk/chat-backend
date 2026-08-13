@@ -170,7 +170,7 @@ class PlinkoViewTests(TestCase):
         self.client.force_authenticate(user=self.player)
         response = self.client.get(reverse('plinko-config'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data['rows_options'], [8, 12, 16])
+        self.assertEqual(response.data['rows_options'], [8])
         self.assertEqual(response.data['multipliers'][8]['low'][0], 5.49)
 
     def test_deactivated_game_blocks_play_via_api(self):

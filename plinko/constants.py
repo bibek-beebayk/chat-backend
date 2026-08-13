@@ -1,4 +1,7 @@
-ROWS_CHOICES = (8, 12, 16)
+# Only 8 rows is offered for now (12/16 disabled at the product level, not
+# removed - MULTIPLIER_TABLES below still has both, so this is a one-line
+# revert if they're re-enabled later).
+ROWS_CHOICES = (8,)
 RISK_CHOICES = ('low', 'medium', 'high')
 
 GAME_SLUG = 'plinko'
