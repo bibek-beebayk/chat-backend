@@ -1,0 +1,144 @@
+from django.contrib.auth import get_user_model
+from django.shortcuts import get_object_or_404
+from rest_framework import permissions, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionRequest
+from .serializers import (
+    AwardPointsSerializer,
+    PointActionSerializer,
+    PointsBalanceSerializer,
+    PointsLedgerEntrySerializer,
+    PointsRedemptionRequestSerializer,
+    RedemptionCreateSerializer,
+    RedemptionStatusUpdateSerializer,
+)
+from .services import (
+    ActiveRedemptionExists,
+    DailyCapExceeded,
+    InsufficientPoints,
+    award_points,
+    create_redemption_request,
+    review_redemption_request,
+)
+
+
+def _is_staff_user(user):
+    return bool(user and user.is_authenticated and getattr(user, 'user_type', None) == 'staff')
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def balance_view(request):
+    balance, _ = PointsBalance.objects.get_or_create(user=request.user)
+    return Response(PointsBalanceSerializer(balance).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def ledger_view(request):
+    entries = (
+        PointsLedgerEntry.objects
+        .filter(user=request.user)
+        .select_related('action')
+        .order_by('-created_at')[:50]
+    )
+    return Response(PointsLedgerEntrySerializer(entries, many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_redemption_view(request):
+    if getattr(request.user, 'user_type', None) != 'player':
+        return Response({'error': 'Only players can request points redemptions.'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = RedemptionCreateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    try:
+        redemption_request = create_redemption_request(
+            request.user,
+            serializer.validated_data['points_amount'],
+            note=serializer.validated_data.get('note', ''),
+            reward_description=serializer.validated_data.get('reward_description', ''),
+        )
+    except InsufficientPoints:
+        return Response({'error': 'You do not have enough points for this redemption.'}, status=status.HTTP_400_BAD_REQUEST)
+    except ActiveRedemptionExists:
+        return Response({'error': 'You already have a redemption request in progress.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(PointsRedemptionRequestSerializer(redemption_request).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def redemption_list_view(request):
+    if not _is_staff_user(request.user):
+        return Response({'error': 'Only staff can view points redemption requests.'}, status=status.HTTP_403_FORBIDDEN)
+
+    queryset = PointsRedemptionRequest.objects.select_related('user', 'reviewed_by').all()
+    status_filter = request.query_params.get('status')
+    if status_filter:
+        queryset = queryset.filter(status=status_filter)
+    return Response(PointsRedemptionRequestSerializer(queryset, many=True).data)
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def redemption_update_view(request, request_id):
+    if not _is_staff_user(request.user):
+        return Response({'error': 'Only staff can update points redemption requests.'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = RedemptionStatusUpdateSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    redemption_request = get_object_or_404(PointsRedemptionRequest, pk=request_id)
+
+    try:
+        redemption_request = review_redemption_request(
+            redemption_request,
+            request.user,
+            serializer.validated_data['status'],
+            staff_note=serializer.validated_data.get('staff_note', ''),
+        )
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(PointsRedemptionRequestSerializer(redemption_request).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def action_list_view(request):
+    if not _is_staff_user(request.user):
+        return Response({'error': 'Only staff can view point actions.'}, status=status.HTTP_403_FORBIDDEN)
+
+    actions = PointAction.objects.all()
+    return Response(PointActionSerializer(actions, many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def award_points_view(request):
+    if not _is_staff_user(request.user):
+        return Response({'error': 'Only staff can award points.'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = AwardPointsSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    target_user = get_object_or_404(get_user_model(), pk=serializer.validated_data['user_id'])
+
+    try:
+        entry = award_points(
+            target_user,
+            serializer.validated_data['action_slug'],
+            idempotency_key=serializer.validated_data.get('idempotency_key', ''),
+            note=serializer.validated_data.get('note', ''),
+            awarded_by=request.user,
+        )
+    except PointAction.DoesNotExist:
+        return Response({'error': 'Unknown or inactive point action.'}, status=status.HTTP_400_BAD_REQUEST)
+    except DailyCapExceeded as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(PointsLedgerEntrySerializer(entry).data, status=status.HTTP_201_CREATED)

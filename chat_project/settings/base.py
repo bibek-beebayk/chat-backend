@@ -31,6 +31,9 @@ INSTALLED_APPS = [
     'announcements',
     'faqs',
     'rewards',
+    'points',
+    'games',
+    'plinko',
 ]
 
 MIDDLEWARE = [

@@ -1,0 +1,52 @@
+from rest_framework import permissions, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from points.services import InsufficientPoints
+from .constants import MAX_WAGER, MIN_WAGER, MULTIPLIER_TABLES, RISK_CHOICES, ROWS_CHOICES
+from .models import PlinkoRound
+from .serializers import PlinkoPlayRequestSerializer, PlinkoRoundSerializer
+from .services import GameUnavailable, play_round
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def config_view(request):
+    return Response({
+        'rows_options': list(ROWS_CHOICES),
+        'risk_options': list(RISK_CHOICES),
+        'multipliers': MULTIPLIER_TABLES,
+        'min_wager': MIN_WAGER,
+        'max_wager': MAX_WAGER,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def play_view(request):
+    if getattr(request.user, 'user_type', None) != 'player':
+        return Response({'error': 'Only players can play Plinko.'}, status=status.HTTP_403_FORBIDDEN)
+
+    serializer = PlinkoPlayRequestSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    try:
+        round_obj = play_round(
+            request.user,
+            rows=serializer.validated_data['rows'],
+            risk_level=serializer.validated_data['risk_level'],
+            wager_amount=serializer.validated_data['wager_amount'],
+            drop_offset=serializer.validated_data['drop_offset'],
+        )
+    except GameUnavailable:
+        return Response({'error': 'Plinko is currently unavailable.'}, status=status.HTTP_400_BAD_REQUEST)
+    except InsufficientPoints:
+        return Response({'error': 'You do not have enough points for this wager.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(PlinkoRoundSerializer(round_obj).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def history_view(request):
+    rounds = PlinkoRound.objects.filter(user=request.user)[:50]
+    return Response(PlinkoRoundSerializer(rounds, many=True).data)
