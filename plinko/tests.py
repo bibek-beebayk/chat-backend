@@ -11,11 +11,13 @@ from games.models import Game
 from points.models import PointsBalance, PointsLedgerEntry
 from .constants import BIAS_ROWS, MAX_BIAS, MULTIPLIER_TABLES
 from .free_drop_constants import (
-    FREE_DROP_BIAS_ROWS,
-    FREE_DROP_MAX_BIAS,
+    DROP_BUCKETS,
     FREE_DROP_MULTIPLIER_TABLES,
+    FREE_DROP_PHYSICS_TABLE,
+    bucket_index_for_drop_position,
+    get_physics_table,
 )
-from .free_drop_services import generate_free_drop_path, play_free_drop_round
+from .free_drop_services import pick_free_drop_outcome, play_free_drop_round
 from .models import PlinkoRound
 from .services import GameUnavailable, generate_path, play_round
 
@@ -244,52 +246,52 @@ class PlinkoViewTests(TestCase):
 
 
 class FreeDropMultiplierTableTests(TestCase):
-    def test_multiplier_table_expected_values(self):
+    def test_multiplier_table_shape(self):
+        # Structural checks only - unlike Classic, Free Drop's outcome
+        # distribution is NOT a fair-coin binomial walk (a player's chosen
+        # position skews it directly), so a closed-form binomial EV formula
+        # doesn't apply here. The real EV check against the actual
+        # physics-derived distribution is
+        # test_physics_derived_rtp_stays_safe_across_full_drop_range below.
         for rows, risk_tables in FREE_DROP_MULTIPLIER_TABLES.items():
             for risk_level, table in risk_tables.items():
                 self.assertEqual(len(table), rows + 1)
                 self.assertEqual(table, table[::-1], f'{rows}/{risk_level} is not symmetric')
-                total = sum(Decimal(str(m)) * math.comb(rows, k) for k, m in enumerate(table))
-                ev = total / Decimal(2 ** rows)
-                self.assertGreater(ev, Decimal('0.85'), f'{rows}/{risk_level} EV too low: {ev}')
-                self.assertLess(ev, Decimal('0.99'), f'{rows}/{risk_level} EV too high: {ev}')
 
-    def test_bias_worst_case_ev_stays_safe_at_every_drop_position(self):
+    def test_physics_derived_rtp_stays_safe_across_full_drop_range(self):
         """
-        Unlike Classic's equivalent test, this bias IS live in play_free_drop_round
-        - a player's drop_position directly sets biased_p for the first
-        FREE_DROP_BIAS_ROWS bounces (see free_drop_services.py). EV is
-        monotonic in |drop_position| under this model (bias only ever shifts
-        weight toward the favored side of a symmetric table), so the worst
-        case is always the most extreme position, +/-1.0. This must stay
-        safely under 1.0 (house edge preserved) for every risk tier.
+        Unlike the old (removed) abstract-path model, Free Drop's outcome
+        distribution now comes directly from FREE_DROP_PHYSICS_TABLE - the
+        real, offline-verified Matter.js empirical distribution (see
+        free_drop_constants.py and scripts/generate-free-drop-physics-table.ts).
+        This computes RTP from that *actual* live data, for every bucket
+        across the full legal drop range and every risk tier, so it catches
+        both a bad multiplier table AND a skewed physics distribution.
         """
-        biased_p = 0.5 + FREE_DROP_MAX_BIAS
-
-        def ev_partial_bias(rows, table):
-            n_biased = min(FREE_DROP_BIAS_ROWS, rows)
-            n_fair = rows - n_biased
-            dist_biased = [
-                math.comb(n_biased, k) * (biased_p ** k) * ((1 - biased_p) ** (n_biased - k))
-                for k in range(n_biased + 1)
-            ]
-            dist_fair = [math.comb(n_fair, k) * (0.5 ** n_fair) for k in range(n_fair + 1)]
-            total = 0.0
-            for kb, pb in enumerate(dist_biased):
-                for kf, pf in enumerate(dist_fair):
-                    total += pb * pf * table[kb + kf]
-            return total
-
         worst = 0.0
         worst_id = None
-        for rows, risk_tables in FREE_DROP_MULTIPLIER_TABLES.items():
-            for risk_level, table in risk_tables.items():
-                ev = ev_partial_bias(rows, table)
-                if ev > worst:
-                    worst = ev
-                    worst_id = (rows, risk_level)
+        for rows, buckets in FREE_DROP_PHYSICS_TABLE.items():
+            for bucket_index, slot_weights in buckets.items():
+                total_weight = sum(entry['weight'] for entry in slot_weights.values())
+                self.assertGreater(total_weight, 0, f'rows={rows} bucket={bucket_index} has no reachable slots')
+                for risk_level, table in FREE_DROP_MULTIPLIER_TABLES[rows].items():
+                    ev = sum(entry['weight'] * table[slot] for slot, entry in slot_weights.items()) / total_weight
+                    if ev > worst:
+                        worst = ev
+                        worst_id = (rows, bucket_index, risk_level)
 
-        self.assertLess(worst, 0.99, f'Worst-case biased EV too high: {worst} ({worst_id})')
+        self.assertLess(worst, 0.99, f'Worst-case physics-derived EV too high: {worst} ({worst_id})')
+
+    def test_extreme_and_center_buckets_individually_stay_under_full_rtp(self):
+        # Explicit spot-check on the buckets called out by the design brief
+        # (far left/right and center), on top of the exhaustive sweep above.
+        for rows, buckets in FREE_DROP_PHYSICS_TABLE.items():
+            for bucket_index in {0, DROP_BUCKETS // 2, DROP_BUCKETS - 1}:
+                slot_weights = buckets[bucket_index]
+                total_weight = sum(entry['weight'] for entry in slot_weights.values())
+                for risk_level, table in FREE_DROP_MULTIPLIER_TABLES[rows].items():
+                    ev = sum(entry['weight'] * table[slot] for slot, entry in slot_weights.items()) / total_weight
+                    self.assertLess(ev, 1.0, f'rows={rows} bucket={bucket_index} risk={risk_level}: EV {ev} >= 100%')
 
 
 class FreeDropServiceTests(TestCase):
@@ -303,37 +305,68 @@ class FreeDropServiceTests(TestCase):
         Game.objects.filter(slug='plinko').update(is_active=True)
         PointsBalance.objects.create(user=self.user, balance=1000)
 
-    def test_forced_path_produces_expected_outcome(self):
-        with mock.patch('plinko.free_drop_services.generate_free_drop_path', return_value=[1] * 8):
-            round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=100, drop_position=0.5)
+    def test_outcome_is_always_a_slot_physically_reachable_from_the_bucket(self):
+        # The core correctness guarantee this whole rework exists for: the
+        # picked slot must always be a key in that exact bucket's verified
+        # table - never invented, never borrowed from a neighboring bucket.
+        for drop_position in (-1.0, -0.6, -0.2, 0.0, 0.35, 0.7, 1.0):
+            for _ in range(20):
+                bucket_index, slot_index, physics_seed = pick_free_drop_outcome(8, drop_position)
+                self.assertEqual(bucket_index, bucket_index_for_drop_position(drop_position))
+                reachable = get_physics_table(8, bucket_index)
+                self.assertIn(slot_index, reachable, f'slot {slot_index} not reachable from bucket {bucket_index}')
+                self.assertIn(physics_seed, reachable[slot_index]['seeds'])
+
+    def test_physics_seed_and_slot_are_stored(self):
+        round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=100, drop_position=0.5)
 
         self.assertEqual(round_obj.mode, PlinkoRound.MODE_FREE_DROP)
-        self.assertEqual(round_obj.slot_index, 8)
-        self.assertEqual(round_obj.multiplier, Decimal('5.49'))
-        self.assertEqual(round_obj.payout_amount, Decimal('549.00'))
-        self.assertEqual(round_obj.drop_position, 0.5)
+        self.assertIsNotNone(round_obj.physics_seed)
+        bucket_index = bucket_index_for_drop_position(0.5)
+        reachable = get_physics_table(8, bucket_index)
+        self.assertIn(round_obj.slot_index, reachable)
+        self.assertIn(round_obj.physics_seed, reachable[round_obj.slot_index]['seeds'])
+        self.assertEqual(
+            round_obj.multiplier,
+            Decimal(str(FREE_DROP_MULTIPLIER_TABLES[8]['low'][round_obj.slot_index])),
+        )
+
+    def test_repeated_rounds_from_same_position_vary(self):
+        # Same drop_position across many rounds should not always produce
+        # the exact same (slot, seed) - real server-side entropy per round.
+        outcomes = {
+            (round_obj.slot_index, round_obj.physics_seed)
+            for round_obj in (
+                play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=5, drop_position=0.35)
+                for _ in range(40)
+            )
+        }
+        self.assertGreater(len(outcomes), 1)
+
+    def test_drop_position_statistically_shifts_landing_distribution(self):
+        # Requirement: a far-left drop should statistically favor left-side
+        # slots (lower slot_index) versus a far-right drop, without going
+        # through play_free_drop_round (no points spent) - pick_free_drop_outcome
+        # is the same weighted draw the real flow uses.
+        def average_slot(position, samples=250):
+            total = sum(pick_free_drop_outcome(8, position)[1] for _ in range(samples))
+            return total / samples
+
+        self.assertLess(average_slot(-1.0), average_slot(1.0))
 
     def test_drop_position_clamped_beyond_range(self):
-        with mock.patch('plinko.free_drop_services._rng') as mock_rng:
-            mock_rng.random.return_value = 1.0  # always "left"
-            round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=10, drop_position=5.0)
+        round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=10, drop_position=5.0)
         self.assertEqual(round_obj.drop_position, 1.0)
 
-    def test_drop_position_statistically_biases_outcome(self):
-        rows = 8
-        right_totals = sum(sum(generate_free_drop_path(rows, drop_position=1.0)) for _ in range(300))
-        left_totals = sum(sum(generate_free_drop_path(rows, drop_position=-1.0)) for _ in range(300))
-        self.assertGreater(right_totals, left_totals)
-
-    def test_ledger_entry_records_mode_and_drop_position(self):
-        with mock.patch('plinko.free_drop_services.generate_free_drop_path', return_value=[0] * 8):
-            round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=100, drop_position=-0.3)
+    def test_ledger_entry_records_mode_drop_position_and_seed(self):
+        round_obj = play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=100, drop_position=-0.3)
 
         entry = round_obj.ledger_entry
         self.assertIsNotNone(entry)
         self.assertEqual(entry.metadata['game'], 'plinko')
         self.assertEqual(entry.metadata['mode'], 'free_drop')
         self.assertEqual(entry.metadata['drop_position'], '-0.3')
+        self.assertEqual(entry.metadata['physics_seed'], round_obj.physics_seed)
 
     def test_inactive_game_blocks_play(self):
         Game.objects.filter(slug='plinko').update(is_active=False)
@@ -352,13 +385,15 @@ class FreeDropServiceTests(TestCase):
             play_free_drop_round(self.user, rows=8, risk_level='high', wager_amount=wager, drop_position=1.0)
             self.assertGreaterEqual(PointsBalance.objects.get(user=self.user).balance, 0)
 
-    def test_classic_round_does_not_gain_drop_position(self):
-        # Cross-mode isolation guard: Classic rounds must keep drop_position
-        # null - Free Drop's field should never leak a value onto Classic play.
+    def test_classic_round_does_not_gain_drop_position_or_physics_seed(self):
+        # Cross-mode isolation guard: Classic rounds must keep drop_position/
+        # physics_seed null - Free Drop's fields should never leak onto
+        # Classic play, which still uses its own untouched path-based flow.
         with mock.patch('plinko.services.generate_path', return_value=[1] * 8):
             classic_round = play_round(self.user, rows=8, risk_level='low', wager_amount=10)
         self.assertEqual(classic_round.mode, PlinkoRound.MODE_CLASSIC)
         self.assertIsNone(classic_round.drop_position)
+        self.assertIsNone(classic_round.physics_seed)
 
 
 class FreeDropViewTests(TestCase):
@@ -385,7 +420,7 @@ class FreeDropViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['rows_options'], [8])
         self.assertEqual(response.data['wager_options'], [5, 10])
-        self.assertEqual(response.data['multipliers'][8]['low'][0], 5.49)
+        self.assertEqual(response.data['multipliers'][8]['low'][0], FREE_DROP_MULTIPLIER_TABLES[8]['low'][0])
 
     def test_drop_position_is_required(self):
         self.client.force_authenticate(user=self.player)
@@ -417,7 +452,7 @@ class FreeDropViewTests(TestCase):
         )
         self.assertEqual(response.status_code, 401)
 
-    def test_successful_play_returns_round_with_mode_and_drop_position(self):
+    def test_successful_play_returns_round_with_mode_drop_position_and_seed(self):
         self.client.force_authenticate(user=self.player)
         response = self.client.post(
             reverse('plinko-free-drop-play'),
@@ -426,7 +461,29 @@ class FreeDropViewTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['mode'], 'free_drop')
         self.assertEqual(response.data['drop_position'], 0.4)
+        self.assertIsNotNone(response.data['physics_seed'])
+        bucket_index = bucket_index_for_drop_position(0.4)
+        reachable = get_physics_table(8, bucket_index)
+        self.assertIn(response.data['slot_index'], reachable)
         self.assertEqual(PlinkoRound.objects.filter(user=self.player, mode='free_drop').count(), 1)
+
+    def test_client_cannot_submit_its_own_slot_multiplier_or_payout(self):
+        # FreeDropPlayRequestSerializer doesn't declare these fields at all,
+        # so DRF silently ignores them - the server-computed values must
+        # come out instead, never whatever the client tried to inject.
+        self.client.force_authenticate(user=self.player)
+        response = self.client.post(
+            reverse('plinko-free-drop-play'),
+            {
+                'rows': 8, 'risk_level': 'low', 'wager_amount': 10, 'drop_position': 0.0,
+                'slot_index': 999, 'multiplier': '9999.00', 'payout_amount': '9999.00',
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertNotEqual(response.data['multiplier'], '9999.00')
+        self.assertNotEqual(response.data['payout_amount'], '9999.00')
+        bucket_index = bucket_index_for_drop_position(0.0)
+        self.assertIn(response.data['slot_index'], get_physics_table(8, bucket_index))
 
     def test_wager_exceeding_balance_is_rejected(self):
         self.client.force_authenticate(user=self.player)
@@ -449,7 +506,7 @@ class FreeDropViewTests(TestCase):
         self.assertEqual(PlinkoRound.objects.count(), 0)
         self.assertEqual(PointsBalance.objects.get(user=self.player).balance, 1000)
 
-    def test_history_endpoint_includes_both_modes(self):
+    def test_history_endpoint_includes_both_modes_with_physics_seed(self):
         self.client.force_authenticate(user=self.player)
         self.client.post(reverse('plinko-play'), {'rows': 8, 'risk_level': 'low', 'wager_amount': 10})
         self.client.post(
@@ -460,3 +517,6 @@ class FreeDropViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         modes = {row['mode'] for row in response.data}
         self.assertEqual(modes, {'classic', 'free_drop'})
+        by_mode = {row['mode']: row for row in response.data}
+        self.assertIsNotNone(by_mode['free_drop']['physics_seed'])
+        self.assertIsNone(by_mode['classic']['physics_seed'])

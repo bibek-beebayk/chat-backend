@@ -33,6 +33,7 @@ class PlinkoRoundSerializer(serializers.ModelSerializer):
             'path',
             'drop_offset',
             'drop_position',
+            'physics_seed',
             'balance_after',
             'created_at',
         ]

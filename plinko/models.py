@@ -39,6 +39,13 @@ class PlinkoRound(models.Model):
     # field above, which is inert dead weight from the old drag-to-bias
     # mechanic and must stay that way - see free_drop_services.py.
     drop_position = models.FloatField(null=True, blank=True)
+    # Free Drop only - the server-selected deterministic physics seed used
+    # to spawn/replay the Matter.js ball. Combined with rows and the exact
+    # drop_position above, this makes a Free Drop round fully reproducible:
+    # the same (rows, drop_position, physics_seed) always plays out the same
+    # physical trajectory. Null for Classic (which uses the seed table in
+    # plinkoSeedTable.ts keyed by slot only, no player-chosen position).
+    physics_seed = models.PositiveBigIntegerField(null=True, blank=True)
     balance_after = models.DecimalField(max_digits=12, decimal_places=2)
     ledger_entry = models.OneToOneField(
         'points.PointsLedgerEntry',
