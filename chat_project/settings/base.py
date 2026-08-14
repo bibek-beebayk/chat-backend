@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'xp',
     'games',
     'plinko',
+    'slots',
 ]
 
 MIDDLEWARE = [
