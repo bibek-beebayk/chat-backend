@@ -7,6 +7,13 @@ class PlinkoRound(models.Model):
     ROWS_CHOICES = [(value, str(value)) for value in ROWS_CHOICES]
     RISK_CHOICES = [(value, value.capitalize()) for value in RISK_CHOICES]
 
+    MODE_CLASSIC = 'classic'
+    MODE_FREE_DROP = 'free_drop'
+    MODE_CHOICES = [
+        (MODE_CLASSIC, 'Classic'),
+        (MODE_FREE_DROP, 'Free Drop'),
+    ]
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -17,6 +24,7 @@ class PlinkoRound(models.Model):
         on_delete=models.PROTECT,
         related_name='plinko_rounds',
     )
+    mode = models.CharField(max_length=16, choices=MODE_CHOICES, default=MODE_CLASSIC)
     rows = models.PositiveSmallIntegerField(choices=ROWS_CHOICES)
     risk_level = models.CharField(max_length=8, choices=RISK_CHOICES)
     wager_amount = models.PositiveIntegerField()
@@ -25,6 +33,12 @@ class PlinkoRound(models.Model):
     payout_amount = models.DecimalField(max_digits=12, decimal_places=2)
     path = models.JSONField()
     drop_offset = models.FloatField(default=0.0)
+    # Free Drop only - the normalized [-1, 1] horizontal position the player
+    # chose before dropping. Null for Classic rounds (fixed center drop has
+    # no player-chosen position). Kept separate from the legacy drop_offset
+    # field above, which is inert dead weight from the old drag-to-bias
+    # mechanic and must stay that way - see free_drop_services.py.
+    drop_position = models.FloatField(null=True, blank=True)
     balance_after = models.DecimalField(max_digits=12, decimal_places=2)
     ledger_entry = models.OneToOneField(
         'points.PointsLedgerEntry',
@@ -42,4 +56,4 @@ class PlinkoRound(models.Model):
         ]
 
     def __str__(self):
-        return f'{self.user} plinko {self.rows}r/{self.risk_level} slot={self.slot_index} x{self.multiplier}'
+        return f'{self.user} plinko[{self.mode}] {self.rows}r/{self.risk_level} slot={self.slot_index} x{self.multiplier}'
