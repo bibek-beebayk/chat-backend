@@ -1,8 +1,10 @@
-from rest_framework import viewsets, mixins, status
+from rest_framework import viewsets, mixins, permissions, status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import PushToken
-from .serializers import PushTokenSerializer
+from django.shortcuts import get_object_or_404
+from .models import Notification, PushToken
+from .serializers import NotificationSerializer, PushTokenSerializer
 
 class PushTokenViewSet(viewsets.GenericViewSet, mixins.CreateModelMixin):
     serializer_class = PushTokenSerializer
@@ -29,3 +31,27 @@ class PushTokenViewSet(viewsets.GenericViewSet, mixins.CreateModelMixin):
         )
         
         return Response({'status': 'registered', 'id': token.id}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def notification_list_view(request):
+    notifications = Notification.objects.filter(user=request.user)[:50]
+    return Response(NotificationSerializer(notifications, many=True).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def notification_mark_read_view(request, notification_id):
+    notification = get_object_or_404(Notification, id=notification_id, user=request.user)
+    if not notification.is_read:
+        notification.is_read = True
+        notification.save(update_fields=['is_read'])
+    return Response(NotificationSerializer(notification).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def notification_mark_all_read_view(request):
+    Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+    return Response({'status': 'ok'})

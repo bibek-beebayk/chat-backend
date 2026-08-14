@@ -2,7 +2,14 @@ from django import forms
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.shortcuts import render
-from .models import PointAction, PointsAdjustment, PointsBalance, PointsLedgerEntry, PointsRedemptionRequest
+from .models import (
+    PointAction,
+    PointsAdjustment,
+    PointsBalance,
+    PointsLedgerEntry,
+    PointsRedemptionConfig,
+    PointsRedemptionRequest,
+)
 from .services import InsufficientPoints, apply_adjustment
 
 
@@ -40,6 +47,23 @@ class PointsLedgerEntryAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(PointsRedemptionConfig)
+class PointsRedemptionConfigAdmin(admin.ModelAdmin):
+    list_display = ('min_redemption_points', 'rp_to_credit_rate', 'updated_by', 'updated_at')
+    readonly_fields = ('updated_at',)
+
+    def has_add_permission(self, request):
+        # Singleton - block adding a second row once one exists.
+        return not PointsRedemptionConfig.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(PointsRedemptionRequest)

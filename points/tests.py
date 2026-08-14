@@ -1,9 +1,12 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionRequest
+from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionConfig, PointsRedemptionRequest
 from .services import (
     ActiveRedemptionExists,
+    BelowMinimumRedemption,
     DailyCapExceeded,
     InsufficientPoints,
     apply_adjustment,
@@ -34,6 +37,16 @@ class PointsServiceTests(TestCase):
             points_value=10,
             is_active=True,
         )
+        # These tests exercise balance/hold/refund/completion logic with
+        # small numbers - the redemption-minimum feature has its own
+        # dedicated tests below (with realistic 5000+ values), so keep the
+        # minimum low here to avoid entangling the two concerns. The
+        # migration seed already created the pk=1 singleton row, so update
+        # it in place rather than .objects.create() (which forces an
+        # INSERT and would collide with that existing row).
+        config = PointsRedemptionConfig.get_solo()
+        config.min_redemption_points = 1
+        config.save()
 
     def test_award_points_increments_balance_and_lifetime_earned(self):
         award_points(self.user, self.action.slug)
@@ -184,3 +197,67 @@ class PointsServiceTests(TestCase):
     def test_apply_adjustment_rejects_zero_delta(self):
         with self.assertRaises(ValueError):
             apply_adjustment(self.user, self.staff, 0)
+
+
+class RedemptionConfigTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='redeem-player',
+            email='redeem-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.action = PointAction.objects.create(
+            slug='big_grant',
+            label='Big Grant',
+            points_value=10000,
+            is_active=True,
+        )
+
+    def test_get_solo_recreates_default_config_if_missing(self):
+        # In a real deploy the seed migration always creates this row first,
+        # but get_solo() must still be safe to call if it's ever missing.
+        PointsRedemptionConfig.objects.all().delete()
+        self.assertEqual(PointsRedemptionConfig.objects.count(), 0)
+        config = PointsRedemptionConfig.get_solo()
+        self.assertEqual(config.min_redemption_points, 5000)
+        self.assertEqual(PointsRedemptionConfig.objects.count(), 1)
+
+    def test_singleton_always_uses_pk_1(self):
+        config = PointsRedemptionConfig(min_redemption_points=7000)
+        config.save()
+        self.assertEqual(config.pk, 1)
+        config2 = PointsRedemptionConfig(min_redemption_points=8000)
+        config2.save()
+        self.assertEqual(PointsRedemptionConfig.objects.count(), 1)
+        self.assertEqual(PointsRedemptionConfig.objects.get().min_redemption_points, 8000)
+
+    def test_below_minimum_redemption_is_rejected(self):
+        award_points(self.user, self.action.slug)  # balance = 10000
+        with self.assertRaises(BelowMinimumRedemption):
+            create_redemption_request(self.user, 4999)
+        self.assertEqual(PointsBalance.objects.get(user=self.user).balance, 10000)
+        self.assertEqual(PointsRedemptionRequest.objects.count(), 0)
+
+    def test_exact_minimum_redemption_is_accepted(self):
+        award_points(self.user, self.action.slug)
+        redemption_request = create_redemption_request(self.user, 5000)
+        self.assertEqual(redemption_request.points_amount, 5000)
+
+    def test_conversion_rate_is_snapshotted_and_survives_later_rate_changes(self):
+        config = PointsRedemptionConfig.get_solo()
+        config.min_redemption_points = 5000
+        config.rp_to_credit_rate = Decimal('2.5000')
+        config.save()
+        award_points(self.user, self.action.slug)
+        redemption_request = create_redemption_request(self.user, 5000)
+        self.assertEqual(redemption_request.conversion_rate_snapshot, Decimal('2.5000'))
+        self.assertEqual(redemption_request.hi_rollin_credit_amount, Decimal('12500.00'))
+
+        # Changing the live rate afterward must not alter the historical request.
+        config = PointsRedemptionConfig.get_solo()
+        config.rp_to_credit_rate = Decimal('9.0000')
+        config.save()
+        redemption_request.refresh_from_db()
+        self.assertEqual(redemption_request.conversion_rate_snapshot, Decimal('2.5000'))
+        self.assertEqual(redemption_request.hi_rollin_credit_amount, Decimal('12500.00'))

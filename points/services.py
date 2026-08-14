@@ -1,6 +1,8 @@
+from decimal import Decimal, ROUND_HALF_UP
+
 from django.db import IntegrityError, transaction
 from django.utils import timezone
-from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionRequest
+from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionConfig, PointsRedemptionRequest
 
 
 class InsufficientPoints(Exception):
@@ -9,6 +11,12 @@ class InsufficientPoints(Exception):
 
 class ActiveRedemptionExists(Exception):
     pass
+
+
+class BelowMinimumRedemption(Exception):
+    def __init__(self, minimum):
+        self.minimum = minimum
+        super().__init__(f'Minimum redemption is {minimum} points.')
 
 
 class DailyCapExceeded(Exception):
@@ -133,6 +141,10 @@ def settle_wager(user, *, wager_amount, payout_amount, entry_type=PointsLedgerEn
 
 @transaction.atomic
 def create_redemption_request(user, points_amount, note='', reward_description=''):
+    config = PointsRedemptionConfig.get_solo()
+    if points_amount < config.min_redemption_points:
+        raise BelowMinimumRedemption(config.min_redemption_points)
+
     balance, _ = PointsBalance.objects.select_for_update().get_or_create(user=user)
     if balance.balance < points_amount:
         raise InsufficientPoints()
@@ -154,6 +166,10 @@ def create_redemption_request(user, points_amount, note='', reward_description='
         points_amount=points_amount,
         note=note,
         reward_description=reward_description,
+        conversion_rate_snapshot=config.rp_to_credit_rate,
+        hi_rollin_credit_amount=(Decimal(points_amount) * config.rp_to_credit_rate).quantize(
+            Decimal('0.01'), rounding=ROUND_HALF_UP
+        ),
     )
     PointsLedgerEntry.objects.create(
         user=user,

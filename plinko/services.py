@@ -6,6 +6,7 @@ from games.models import Game
 from points.services import settle_wager
 from .constants import BIAS_ROWS, GAME_SLUG, MAX_BIAS, get_multiplier_table
 from .models import PlinkoRound
+from .xp_hooks import grant_gameplay_xp
 
 
 class GameUnavailable(Exception):
@@ -73,6 +74,8 @@ def play_round(user, *, rows, risk_level, wager_amount, drop_offset=0.0):
         },
         note=f'Plinko round: {rows} rows, {risk_level} risk, landed slot {slot_index} (x{multiplier})',
     )
+
+    grant_gameplay_xp(user, ledger_entry)
 
     return PlinkoRound.objects.create(
         user=user,

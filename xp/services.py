@@ -1,0 +1,140 @@
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+from notifications.services import create_notification
+from .models import XPAction, XPBalance, XPLedgerEntry
+from .ranks import rank_for_xp
+
+
+class DailyCapExceeded(Exception):
+    def __init__(self, action_slug):
+        self.action_slug = action_slug
+        super().__init__(f'Daily XP award cap reached for action "{action_slug}".')
+
+
+class ChallengeNotYetEligible(Exception):
+    def __init__(self, action_slug, current_count, target_count):
+        self.action_slug = action_slug
+        self.current_count = current_count
+        self.target_count = target_count
+        super().__init__(
+            f'Challenge "{action_slug}" not yet eligible: {current_count}/{target_count} today.'
+        )
+
+
+@transaction.atomic
+def award_xp(user, action_slug, *, idempotency_key='', metadata=None, note='', awarded_by=None):
+    """
+    Server-side entry point for crediting XP to a user. Mirrors
+    points.services.award_points() exactly (idempotency-key dedup, daily
+    cap, select_for_update balance lock, IntegrityError race recovery),
+    plus: an optional "daily challenge" eligibility gate, and rank-up
+    detection that fires an in-app notification.
+
+    Not exposed as a player-facing HTTP endpoint - see xp/views.py.
+    """
+    action = XPAction.objects.get(slug=action_slug, is_active=True)
+
+    if idempotency_key:
+        existing = XPLedgerEntry.objects.filter(
+            user=user, action=action, idempotency_key=idempotency_key,
+        ).first()
+        if existing:
+            return existing
+
+    if action.max_awards_per_day is not None:
+        today_count = XPLedgerEntry.objects.filter(
+            user=user,
+            action=action,
+            entry_type=XPLedgerEntry.ENTRY_EARN,
+            created_at__date=timezone.localdate(),
+        ).count()
+        if today_count >= action.max_awards_per_day:
+            raise DailyCapExceeded(action.slug)
+
+    if action.challenge_target_count is not None:
+        today_source_count = XPLedgerEntry.objects.filter(
+            user=user,
+            action_id=action.challenge_source_action_id,
+            entry_type=XPLedgerEntry.ENTRY_EARN,
+            created_at__date=timezone.localdate(),
+        ).count()
+        if today_source_count < action.challenge_target_count:
+            raise ChallengeNotYetEligible(action.slug, today_source_count, action.challenge_target_count)
+
+    balance, _ = XPBalance.objects.select_for_update().get_or_create(user=user)
+    old_rank_slug = balance.rank_slug or rank_for_xp(0).slug
+    balance.total_xp += action.xp_value
+    new_tier = rank_for_xp(balance.total_xp)
+    balance.rank_slug = new_tier.slug
+    balance.rank_updated_at = timezone.now()
+    balance.save(update_fields=['total_xp', 'rank_slug', 'rank_updated_at', 'updated_at'])
+
+    try:
+        entry = XPLedgerEntry.objects.create(
+            user=user,
+            entry_type=XPLedgerEntry.ENTRY_EARN,
+            delta=action.xp_value,
+            xp_after=balance.total_xp,
+            rank_after=new_tier.slug,
+            action=action,
+            idempotency_key=idempotency_key,
+            metadata=metadata or {},
+            note=note,
+            awarded_by=awarded_by,
+        )
+    except IntegrityError:
+        # Concurrent retry with the same idempotency_key lost the race; return the winner.
+        transaction.set_rollback(True)
+        return XPLedgerEntry.objects.get(user=user, action=action, idempotency_key=idempotency_key)
+
+    if new_tier.slug != old_rank_slug:
+        create_notification(
+            user,
+            title=f'Rank up! You reached {new_tier.label}',
+            body=f'You earned {action.xp_value} XP and ranked up to {new_tier.label}.',
+        )
+
+    return entry
+
+
+@transaction.atomic
+def apply_adjustment(user, staff_user, xp_delta, note=''):
+    """
+    Manual staff correction (positive to award, negative to deduct) -
+    mirrors points.services.apply_adjustment(). XP may legitimately be
+    corrected downward (e.g. reversing an abusive award), but total_xp
+    itself must never go negative.
+    """
+    if xp_delta == 0:
+        raise ValueError('xp_delta must be non-zero.')
+
+    balance, _ = XPBalance.objects.select_for_update().get_or_create(user=user)
+    new_total = balance.total_xp + xp_delta
+    if new_total < 0:
+        raise ValueError('Adjustment would make total_xp negative.')
+
+    old_rank_slug = balance.rank_slug or rank_for_xp(0).slug
+    balance.total_xp = new_total
+    new_tier = rank_for_xp(balance.total_xp)
+    balance.rank_slug = new_tier.slug
+    balance.rank_updated_at = timezone.now()
+    balance.save(update_fields=['total_xp', 'rank_slug', 'rank_updated_at', 'updated_at'])
+
+    entry = XPLedgerEntry.objects.create(
+        user=user,
+        entry_type=XPLedgerEntry.ENTRY_ADJUSTMENT,
+        delta=xp_delta,
+        xp_after=balance.total_xp,
+        rank_after=new_tier.slug,
+        note=note,
+        awarded_by=staff_user,
+    )
+
+    if new_tier.slug != old_rank_slug:
+        create_notification(
+            user,
+            title=f'Rank up! You reached {new_tier.label}',
+            body=f'You ranked up to {new_tier.label}.',
+        )
+
+    return balance, entry

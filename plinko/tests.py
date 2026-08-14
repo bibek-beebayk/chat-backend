@@ -9,6 +9,7 @@ from rest_framework.test import APIClient
 
 from games.models import Game
 from points.models import PointsBalance, PointsLedgerEntry
+from xp.models import XPBalance, XPLedgerEntry
 from .constants import BIAS_ROWS, MAX_BIAS, MULTIPLIER_TABLES
 from .free_drop_constants import (
     DROP_BUCKETS,
@@ -620,3 +621,71 @@ class FreeDropPhysicsTableValidationTests(TestCase):
                 table = get_physics_table(8, bucket_index)
                 self.assertIn(slot_index, table)
                 self.assertIn(physics_seed, table[slot_index]['seeds'])
+
+
+class PlinkoGameplayXPHookTests(TestCase):
+    """
+    Relies on the seeded XPAction rows from xp/migrations/0002_seed_xp_actions.py:
+    qualified_gameplay (+2 XP, max_awards_per_day=25) and
+    daily_challenge_rounds (+30 XP, challenge_target_count=3, sourced from
+    qualified_gameplay). Covers both play_round (Classic) and
+    play_free_drop_round (Free Drop) since both call the same
+    plinko.xp_hooks.grant_gameplay_xp() helper.
+    """
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='xp-gameplay-player',
+            email='xp-gameplay-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        Game.objects.filter(slug='plinko').update(is_active=True)
+        PointsBalance.objects.create(user=self.user, balance=100000)
+
+    def test_qualified_gameplay_xp_awarded_per_round_regardless_of_wager_size(self):
+        play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        play_round(self.user, rows=8, risk_level='low', wager_amount=10)
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 4)  # 2 rounds x 2 XP
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='qualified_gameplay').count(), 2,
+        )
+
+    def test_qualified_gameplay_xp_stops_at_daily_cap_without_blocking_play(self):
+        for _ in range(30):
+            round_obj = play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        self.assertIsNotNone(round_obj)  # the 30th round still succeeded despite the 25/day XP cap
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='qualified_gameplay').count(), 25,
+        )
+        self.assertEqual(PlinkoRound.objects.filter(user=self.user).count(), 30)
+
+    def test_daily_challenge_fires_once_after_three_rounds(self):
+        for _ in range(3):
+            play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='daily_challenge_rounds').count(), 1,
+        )
+        # Total: 3 rounds x 2 XP (qualified_gameplay) + 30 XP (challenge) = 36
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 36)
+
+        play_round(self.user, rows=8, risk_level='low', wager_amount=5)  # a 4th round must not re-fire the challenge
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='daily_challenge_rounds').count(), 1,
+        )
+
+    def test_free_drop_rounds_also_award_gameplay_xp(self):
+        play_free_drop_round(self.user, rows=8, risk_level='low', wager_amount=5, drop_position=0.0)
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='qualified_gameplay').count(), 1,
+        )
+
+    def test_xp_award_never_blocks_or_rolls_back_the_wager(self):
+        # Even with a misconfigured/deactivated XPAction, the round and
+        # points settlement must succeed unaffected.
+        from xp.models import XPAction
+        XPAction.objects.filter(slug='qualified_gameplay').update(is_active=False)
+        balance_before = PointsBalance.objects.get(user=self.user).balance
+        round_obj = play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        self.assertIsNotNone(round_obj.id)
+        self.assertNotEqual(PointsBalance.objects.get(user=self.user).balance, balance_before)  # wager still settled

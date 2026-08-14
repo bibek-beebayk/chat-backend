@@ -6,6 +6,7 @@ from chat_project.url_utils import build_public_absolute_uri
 from rewards.services import record_daily_visit
 from analytics.models import AnalyticsEvent
 from analytics.services import track_event
+from .services import grant_daily_login_rewards
 
 User = get_user_model()
 
@@ -157,6 +158,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         data = super().validate(attrs)
         record_daily_visit(self.user)
+        grant_daily_login_rewards(self.user)
         request = self.context.get('request')
         track_event(
             request=request,

@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/faqs/', include('faqs.urls')),
     path('api/rewards/', include('rewards.urls')),
     path('api/points/', include('points.urls')),
+    path('api/xp/', include('xp.urls')),
     path('api/games/', include('games.urls')),
     path('api/plinko/', include('plinko.urls')),
     path('admin/user-search/', admin_player_search_view),

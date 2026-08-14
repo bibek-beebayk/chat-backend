@@ -126,6 +126,46 @@ class PointsLedgerEntry(models.Model):
         return f'{self.user} {self.entry_type} {sign}{self.delta}'
 
 
+class PointsRedemptionConfig(models.Model):
+    """
+    Singleton (always pk=1), admin-editable. Holds the redemption minimum
+    and the Reward-Point-to-Hi-Rollin-Credit conversion rate - the doc
+    explicitly leaves the rate unspecified rather than hard-coding an
+    assumed value, so this is staff-configurable, and each redemption
+    request snapshots the rate it was created under (see
+    PointsRedemptionRequest.conversion_rate_snapshot) so later rate changes
+    never alter historical requests.
+    """
+    min_redemption_points = models.PositiveIntegerField(default=5000)
+    rp_to_credit_rate = models.DecimalField(max_digits=10, decimal_places=4, default=Decimal('1.0000'))
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+
+    class Meta:
+        verbose_name = 'Redemption Settings'
+        verbose_name_plural = 'Redemption Settings'
+
+    def __str__(self):
+        return f'Redemption settings (min={self.min_redemption_points}, rate={self.rp_to_credit_rate})'
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        pass
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class PointsRedemptionRequest(models.Model):
     STATUS_PENDING = 'pending'
     STATUS_APPROVED = 'approved'
@@ -146,6 +186,11 @@ class PointsRedemptionRequest(models.Model):
     )
     points_amount = models.PositiveIntegerField()
     reward_description = models.CharField(max_length=255, blank=True)
+    # Snapshot of PointsRedemptionConfig at creation time - nullable because
+    # pre-existing rows (created before this field existed) have no
+    # knowable historical rate; never backfilled with a guess.
+    conversion_rate_snapshot = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    hi_rollin_credit_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
     note = models.TextField(blank=True)
     staff_note = models.TextField(blank=True)

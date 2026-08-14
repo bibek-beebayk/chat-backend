@@ -15,6 +15,7 @@ from .serializers import (
 )
 from .services import (
     ActiveRedemptionExists,
+    BelowMinimumRedemption,
     DailyCapExceeded,
     InsufficientPoints,
     award_points,
@@ -62,6 +63,8 @@ def create_redemption_view(request):
             note=serializer.validated_data.get('note', ''),
             reward_description=serializer.validated_data.get('reward_description', ''),
         )
+    except BelowMinimumRedemption as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except InsufficientPoints:
         return Response({'error': 'You do not have enough points for this redemption.'}, status=status.HTTP_400_BAD_REQUEST)
     except ActiveRedemptionExists:

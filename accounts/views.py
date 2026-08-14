@@ -35,6 +35,9 @@ from chat_project.utils import send_zeptomail, search_player
 from rewards.services import record_daily_visit
 from analytics.models import AnalyticsEvent
 from analytics.services import track_event
+from .services import grant_daily_login_rewards, grant_registration_rewards
+from points.models import PointAction
+from xp.models import XPAction
 
 User = get_user_model()
 
@@ -136,6 +139,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
 
 def _build_jwt_login_response(user, request, message='Login successful.'):
     record_daily_visit(user)
+    grant_daily_login_rewards(user)
     track_event(
         request=request,
         user=user,
@@ -249,6 +253,11 @@ def google_login_view(request):
             event_name='google_registration',
             metadata={'user_type': user.user_type, 'method': 'google'},
         )
+        try:
+            grant_registration_rewards(user)
+        except (PointAction.DoesNotExist, XPAction.DoesNotExist) as exc:
+            import logging
+            logging.getLogger(__name__).error('Registration reward grant failed for user %s: %s', user.id, exc)
 
     return Response(
         _build_jwt_login_response(
@@ -840,11 +849,18 @@ def verify_otp_view(request):
         event_name='email_verified',
         metadata={'user_type': user.user_type},
     )
-    
+
     # Mark OTP as used
     otp_record.is_used = True
     otp_record.save()
-    
+
+    if user.user_type == 'player':
+        try:
+            grant_registration_rewards(user)
+        except (PointAction.DoesNotExist, XPAction.DoesNotExist) as exc:
+            import logging
+            logging.getLogger(__name__).error('Registration reward grant failed for user %s: %s', user.id, exc)
+
     # Generate tokens
     from rest_framework_simplejwt.tokens import RefreshToken
     record_daily_visit(user)

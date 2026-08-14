@@ -9,6 +9,8 @@ from .models import (
     STREAK_REWARD_AMOUNT,
     STREAK_TARGET_DAYS,
 )
+from xp.models import XPAction
+from xp.services import ChallengeNotYetEligible, DailyCapExceeded, award_xp
 
 
 def _reset_streak(streak):
@@ -68,6 +70,20 @@ def record_daily_visit(user):
     if streak.current_streak >= STREAK_TARGET_DAYS and streak.receivable_bonus < STREAK_REWARD_AMOUNT:
         streak.receivable_bonus = Decimal(STREAK_REWARD_AMOUNT)
         streak.last_awarded_at = timezone.now()
+        # XP-only (see xp/migrations/0002_seed_xp_actions.py's streak_7day
+        # action) - this is a SEPARATE reward from the Hi-Rollin-paid-out
+        # StreakRedemptionRequest bonus above; don't conflate the two.
+        # Reuses this block's own cycle-boundary guard (current_streak just
+        # crossed the target AND hasn't already been credited this cycle)
+        # rather than re-deriving that transition elsewhere.
+        try:
+            award_xp(
+                user, 'streak_7day',
+                idempotency_key=f'streak_7day:{user.id}:{today.isoformat()}',
+                note='7-day login streak',
+            )
+        except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
+            pass
 
     streak.save(update_fields=['current_streak', 'last_login_date', 'receivable_bonus', 'last_awarded_at', 'updated_at'])
     return streak

@@ -63,6 +63,8 @@ class PointsRedemptionRequestSerializer(serializers.ModelSerializer):
             'status_label',
             'note',
             'staff_note',
+            'conversion_rate_snapshot',
+            'hi_rollin_credit_amount',
             'reviewed_by',
             'reviewed_at',
             'completed_at',

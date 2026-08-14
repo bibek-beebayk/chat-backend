@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     'faqs',
     'rewards',
     'points',
+    'xp',
     'games',
     'plinko',
 ]
