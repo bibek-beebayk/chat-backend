@@ -14,6 +14,7 @@ from .free_drop_constants import (
     DROP_BUCKETS,
     FREE_DROP_MULTIPLIER_TABLES,
     FREE_DROP_PHYSICS_TABLE,
+    _validate_physics_table,
     bucket_index_for_drop_position,
     get_physics_table,
 )
@@ -437,6 +438,49 @@ class FreeDropViewTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(PlinkoRound.objects.count(), 0)
 
+    def test_materially_out_of_range_positions_rejected(self):
+        # 1.2 / -1.4 aren't float-precision noise - genuinely invalid input,
+        # must still be rejected with a clear field-level error.
+        self.client.force_authenticate(user=self.player)
+        for bad_value in (1.2, -1.4):
+            response = self.client.post(
+                reverse('plinko-free-drop-play'),
+                {'rows': 8, 'risk_level': 'low', 'wager_amount': 10, 'drop_position': bad_value},
+            )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn('drop_position', response.data.get('errors', response.data))
+        self.assertEqual(PlinkoRound.objects.count(), 0)
+
+    def test_extreme_left_position_is_valid(self):
+        self.client.force_authenticate(user=self.player)
+        response = self.client.post(
+            reverse('plinko-free-drop-play'),
+            {'rows': 8, 'risk_level': 'low', 'wager_amount': 10, 'drop_position': -1.0},
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['drop_position'], -1.0)
+
+    def test_extreme_right_position_is_valid(self):
+        self.client.force_authenticate(user=self.player)
+        response = self.client.post(
+            reverse('plinko-free-drop-play'),
+            {'rows': 8, 'risk_level': 'low', 'wager_amount': 10, 'drop_position': 1.0},
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['drop_position'], 1.0)
+
+    def test_microscopic_float_overflow_is_tolerated_and_clamped(self):
+        # The actual bug this covers: client-side normalization math can
+        # occasionally produce e.g. -1.0000000000000002 for a drop the
+        # player placed exactly at the extreme edge. That must not 400.
+        self.client.force_authenticate(user=self.player)
+        response = self.client.post(
+            reverse('plinko-free-drop-play'),
+            {'rows': 8, 'risk_level': 'low', 'wager_amount': 10, 'drop_position': -1.0000000000000002},
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['drop_position'], -1.0)
+
     def test_only_players_can_play(self):
         self.client.force_authenticate(user=self.staff)
         response = self.client.post(
@@ -520,3 +564,59 @@ class FreeDropViewTests(TestCase):
         by_mode = {row['mode']: row for row in response.data}
         self.assertIsNotNone(by_mode['free_drop']['physics_seed'])
         self.assertIsNone(by_mode['classic']['physics_seed'])
+
+
+class FreeDropPhysicsTableValidationTests(TestCase):
+    def test_live_table_passes_its_own_validator(self):
+        # The table already loaded successfully at import time (this test
+        # module wouldn't have imported otherwise) - re-running the
+        # validator here just pins that behavior as an explicit regression
+        # guard rather than relying on import-time side effects alone.
+        self.assertEqual(_validate_physics_table(FREE_DROP_PHYSICS_TABLE), FREE_DROP_PHYSICS_TABLE)
+
+    def test_every_bucket_has_at_least_one_seed_per_listed_slot(self):
+        for rows, buckets in FREE_DROP_PHYSICS_TABLE.items():
+            self.assertEqual(len(buckets), DROP_BUCKETS)
+            for bucket_index, slots in buckets.items():
+                self.assertGreater(len(slots), 0, f'rows={rows} bucket={bucket_index} has no reachable slots')
+                for slot_index, entry in slots.items():
+                    self.assertGreaterEqual(slot_index, 0)
+                    self.assertLessEqual(slot_index, rows)
+                    self.assertGreater(len(entry['seeds']), 0)
+                    self.assertTrue(0 < entry['weight'] <= 1)
+
+    def test_validator_rejects_missing_buckets(self):
+        broken = {8: {i: {0: {'seeds': [1], 'weight': 1.0}} for i in range(DROP_BUCKETS - 1)}}  # one bucket short
+        with self.assertRaises(ValueError):
+            _validate_physics_table(broken)
+
+    def test_validator_rejects_empty_bucket(self):
+        broken = {8: {i: ({} if i == 0 else {0: {'seeds': [1], 'weight': 1.0}}) for i in range(DROP_BUCKETS)}}
+        with self.assertRaises(ValueError):
+            _validate_physics_table(broken)
+
+    def test_validator_rejects_out_of_range_slot(self):
+        broken = {8: {i: {99: {'seeds': [1], 'weight': 1.0}} for i in range(DROP_BUCKETS)}}
+        with self.assertRaises(ValueError):
+            _validate_physics_table(broken)
+
+    def test_validator_rejects_empty_seed_list(self):
+        broken = {8: {i: {0: {'seeds': [], 'weight': 1.0}} for i in range(DROP_BUCKETS)}}
+        with self.assertRaises(ValueError):
+            _validate_physics_table(broken)
+
+    def test_validator_rejects_invalid_weight(self):
+        broken = {8: {i: {0: {'seeds': [1], 'weight': 1.5}} for i in range(DROP_BUCKETS)}}
+        with self.assertRaises(ValueError):
+            _validate_physics_table(broken)
+
+    def test_selected_seed_maps_to_the_stored_slot_across_many_positions(self):
+        # Cross-check pick_free_drop_outcome() against the table it reads
+        # from - the chosen seed must always belong to the chosen slot's
+        # seed pool for that exact bucket, for every legal drop position.
+        for drop_position in (-1.0, -0.75, -0.3, 0.0, 0.2, 0.6, 1.0):
+            for _ in range(10):
+                bucket_index, slot_index, physics_seed = pick_free_drop_outcome(8, drop_position)
+                table = get_physics_table(8, bucket_index)
+                self.assertIn(slot_index, table)
+                self.assertIn(physics_seed, table[slot_index]['seeds'])

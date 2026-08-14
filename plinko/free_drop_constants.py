@@ -57,7 +57,56 @@ _PHYSICS_TABLE_PATH = Path(__file__).resolve().parent / 'free_drop_physics_table
 with open(_PHYSICS_TABLE_PATH) as _f:
     _raw_physics_table = json.load(_f)
 
-FREE_DROP_PHYSICS_TABLE = {
+
+def _validate_physics_table(table):
+    """
+    Structural sanity check run once at import time, so a malformed or
+    truncated table.json fails Django startup loudly instead of surfacing
+    as a confusing runtime error (or worse, an inconsistent round) the
+    first time a player hits a bad entry. This can't re-verify that a seed
+    actually reproduces its claimed slot (that requires Matter.js, which
+    only exists in the JS/TS generator - see
+    scripts/generate-free-drop-physics-table.ts's own re-simulation pass
+    for that check) - this only validates the data's shape and internal
+    consistency.
+    """
+    for rows, buckets in table.items():
+        if not isinstance(rows, int) or rows < 1:
+            raise ValueError(f'free_drop_physics_table.json: invalid rows key {rows!r}')
+        if len(buckets) != DROP_BUCKETS:
+            raise ValueError(
+                f'free_drop_physics_table.json: rows={rows} has {len(buckets)} buckets, expected {DROP_BUCKETS}'
+            )
+        for bucket_index, slots in buckets.items():
+            if not (0 <= bucket_index < DROP_BUCKETS):
+                raise ValueError(f'free_drop_physics_table.json: rows={rows} bucket index {bucket_index} out of range')
+            if not slots:
+                raise ValueError(f'free_drop_physics_table.json: rows={rows} bucket={bucket_index} has no reachable slots')
+            total_weight = 0.0
+            for slot_index, entry in slots.items():
+                if not (0 <= slot_index <= rows):
+                    raise ValueError(
+                        f'free_drop_physics_table.json: rows={rows} bucket={bucket_index} slot {slot_index} out of range [0, {rows}]'
+                    )
+                seeds = entry.get('seeds')
+                weight = entry.get('weight')
+                if not seeds or not all(isinstance(s, int) for s in seeds):
+                    raise ValueError(
+                        f'free_drop_physics_table.json: rows={rows} bucket={bucket_index} slot={slot_index} has an empty/invalid seeds list'
+                    )
+                if not isinstance(weight, (int, float)) or not (0 < weight <= 1):
+                    raise ValueError(
+                        f'free_drop_physics_table.json: rows={rows} bucket={bucket_index} slot={slot_index} has invalid weight {weight!r}'
+                    )
+                total_weight += weight
+            if not (0 < total_weight <= 1.0001):
+                raise ValueError(
+                    f'free_drop_physics_table.json: rows={rows} bucket={bucket_index} weights sum to {total_weight}, expected in (0, 1]'
+                )
+    return table
+
+
+FREE_DROP_PHYSICS_TABLE = _validate_physics_table({
     int(rows): {
         int(bucket): {
             int(slot): entry
@@ -66,7 +115,7 @@ FREE_DROP_PHYSICS_TABLE = {
         for bucket, slots in buckets.items()
     }
     for rows, buckets in _raw_physics_table.items()
-}
+})
 
 
 def get_physics_table(rows, bucket_index):
@@ -77,8 +126,8 @@ def get_physics_table(rows, bucket_index):
 # Classic's edge slots are its jackpot tier because a fair coin-flip walk
 # makes them rare (~0.4% at 8 rows). Free Drop breaks that assumption: a
 # player can aim directly at an edge and the real physics table above shows
-# that's the single MOST reliable slot to hit (up to ~70% from the matching
-# extreme bucket) - so pricing edges as a jackpot here would hand out a
+# that's the single MOST reliable slot to hit (well over 50% from the
+# matching extreme bucket) - so pricing edges as a jackpot here would hand out a
 # guaranteed-positive-EV move. The near-center slots are comparatively the
 # *least* reliable to guarantee (even aiming right at them, chaos spreads
 # the result across neighbors more than an edge drop does), so this table's
@@ -91,11 +140,15 @@ def get_physics_table(rows, bucket_index):
 # EVERY bucket in FREE_DROP_PHYSICS_TABLE stays safely under 100% - see
 # plinko/tests.py::FreeDropMultiplierTableTests for the regression guard
 # that recomputes this against the live data, not a static formula.
+# Re-derived (same alpha/ceiling-search method, see git history for the
+# derivation script) after the spawn-x jitter fix changed the physics
+# engine's actual reachability distribution - these values are only valid
+# together with the free_drop_physics_table.json they were fit against.
 FREE_DROP_MULTIPLIER_TABLES = {
     8: {
-        'low':    [0.40, 0.83, 0.83, 1.15, 1.15, 1.15, 0.83, 0.83, 0.40],
-        'medium': [0.15, 0.64, 0.64, 1.24, 1.24, 1.24, 0.64, 0.64, 0.15],
-        'high':   [0.04, 0.46, 0.46, 1.31, 1.31, 1.31, 0.46, 0.46, 0.04],
+        'low':    [0.26, 1.06, 1.10, 1.17, 1.30, 1.17, 1.10, 1.06, 0.26],
+        'medium': [0.06, 0.98, 1.05, 1.17, 1.45, 1.17, 1.05, 0.98, 0.06],
+        'high':   [0.01, 0.84, 0.94, 1.13, 1.59, 1.13, 0.94, 0.84, 0.01],
     },
 }
 
