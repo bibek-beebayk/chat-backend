@@ -13,6 +13,11 @@ class PointAction(models.Model):
     is_active = models.BooleanField(default=True)
     description = models.TextField(blank=True)
     max_awards_per_day = models.PositiveIntegerField(blank=True, null=True)
+    # Defaults True so ordinary earn actions surface in the player-facing
+    # "how to earn" info without extra setup - staff flip this off for
+    # internal/one-off bookkeeping actions (e.g. a dated backfill run) that
+    # would otherwise confuse players reading the Reward Points explainer.
+    is_visible_to_players = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

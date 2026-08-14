@@ -16,7 +16,7 @@ class UserPresence(models.Model):
     )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='OFFLINE')
     socket_id = models.CharField(max_length=255, blank=True, null=True)
-    last_seen = models.DateTimeField(auto_now_add=True)
+    last_seen = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.user.username} - {self.status}"

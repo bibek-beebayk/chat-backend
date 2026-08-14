@@ -13,6 +13,7 @@ from rest_framework.response import Response
 from .models import Post, PostImage, PostLike, PostComment
 from .serializers import PostSerializer, PostCommentSerializer
 from social.models import UserConnection
+from analytics.views import parse_limit
 from notifications.models import Notification, PushToken
 from notifications.fcm import send_push_notification
 from chat.models import Room, Message, RoomParticipant
@@ -175,10 +176,16 @@ class PostViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='feed')
     def feed(self, request):
-        """All posts feed with visibility filtering."""
+        """All posts feed with visibility filtering. Optional ?limit= caps
+        the result (e.g. homepage previews) without loading the full feed -
+        omitted, behavior is unchanged (full unpaginated list)."""
         queryset = Post.objects.filter(is_active=True)
         queryset = self._filter_by_visibility(queryset, request.user).order_by('-created_at')
         queryset = self._annotated_queryset(queryset)
+
+        limit_param = request.query_params.get('limit')
+        if limit_param is not None:
+            queryset = queryset[:parse_limit(limit_param, default=10, maximum=50)]
 
         page = self.paginate_queryset(queryset)
         if page is not None:

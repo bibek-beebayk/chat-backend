@@ -505,7 +505,7 @@ def connection_list_view(request):
     user = request.user
     queryset = UserConnection.objects.filter(
         Q(requester=user) | Q(receiver=user),
-    ).order_by('-updated_at', '-created_at')
+    ).select_related('requester__presence', 'receiver__presence').order_by('-updated_at', '-created_at')
     return Response(UserConnectionSerializer(queryset, many=True, context={'request': request}).data)
 
 

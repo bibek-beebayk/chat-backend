@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from notifications.models import Notification
 from .models import XPAction, XPBalance, XPLedgerEntry
@@ -143,3 +145,73 @@ class XPServiceTests(TestCase):
     def test_apply_adjustment_rejects_zero_delta(self):
         with self.assertRaises(ValueError):
             apply_adjustment(self.user, self.staff, 0)
+
+
+class DailyProgressViewTests(TestCase):
+    """
+    Relies on the real seeded XPAction rows (xp/migrations/0002_seed_xp_actions.py):
+    daily_login (+10 XP, no target) and daily_challenge_rounds (+30 XP,
+    challenge_target_count=3, challenge_source_action=qualified_gameplay).
+    """
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='daily-progress-player',
+            email='daily-progress-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_no_progress_today_returns_zeroed_checklist(self):
+        response = self.client.get(reverse('xp-daily-progress'))
+        self.assertEqual(response.status_code, 200)
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertIn('daily_login', by_slug)
+        self.assertIn('daily_challenge_rounds', by_slug)
+        self.assertFalse(by_slug['daily_login']['completed'])
+        self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 0)
+        self.assertEqual(by_slug['daily_challenge_rounds']['target_count'], 3)
+        self.assertFalse(by_slug['daily_challenge_rounds']['completed'])
+
+    def test_daily_login_marked_completed_after_award(self):
+        award_xp(self.user, 'daily_login', idempotency_key='today')
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertTrue(by_slug['daily_login']['completed'])
+
+    def test_challenge_progress_tracks_source_action_count(self):
+        award_xp(self.user, 'qualified_gameplay', idempotency_key='round-1')
+        award_xp(self.user, 'qualified_gameplay', idempotency_key='round-2')
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 2)
+        self.assertFalse(by_slug['daily_challenge_rounds']['completed'])
+
+    def test_challenge_marked_completed_once_awarded(self):
+        for i in range(3):
+            award_xp(self.user, 'qualified_gameplay', idempotency_key=f'round-{i}')
+        award_xp(self.user, 'daily_challenge_rounds', idempotency_key='today')
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertTrue(by_slug['daily_challenge_rounds']['completed'])
+        self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 3)
+
+    def test_current_count_never_exceeds_target_display(self):
+        for i in range(6):
+            award_xp(self.user, 'qualified_gameplay', idempotency_key=f'round-{i}')
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 3)  # clamped to target, not 6
+
+    def test_only_checklist_actions_appear_not_qualified_gameplay_itself(self):
+        response = self.client.get(reverse('xp-daily-progress'))
+        slugs = {item['slug'] for item in response.data}
+        self.assertEqual(slugs, {'daily_login', 'daily_challenge_rounds'})
+        self.assertNotIn('qualified_gameplay', slugs)
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.get(reverse('xp-daily-progress'))
+        self.assertEqual(response.status_code, 401)

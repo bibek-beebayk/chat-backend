@@ -19,14 +19,32 @@ class PointActionSerializer(serializers.ModelSerializer):
 
 
 class PointsBalanceSerializer(serializers.ModelSerializer):
+    # Scoped to the requesting user's own record (mirrors
+    # rewards.serializers's active_redemption_request pattern for streak
+    # requests) - players need this to see their own pending/approved
+    # redemption without hitting the staff-only redemption_list_view.
+    active_redemption_request = serializers.SerializerMethodField()
+
     class Meta:
         model = PointsBalance
         fields = [
             'balance',
             'lifetime_earned',
+            'active_redemption_request',
             'updated_at',
         ]
         read_only_fields = fields
+
+    def get_active_redemption_request(self, obj):
+        request_obj = (
+            PointsRedemptionRequest.objects
+            .filter(user=obj.user, status__in=PointsRedemptionRequest.ACTIVE_STATUSES)
+            .order_by('-created_at')
+            .first()
+        )
+        if not request_obj:
+            return None
+        return PointsRedemptionRequestSerializer(request_obj).data
 
 
 class PointsLedgerEntrySerializer(serializers.ModelSerializer):

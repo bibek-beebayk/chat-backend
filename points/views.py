@@ -3,7 +3,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionRequest
+from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionConfig, PointsRedemptionRequest
 from .serializers import (
     AwardPointsSerializer,
     PointActionSerializer,
@@ -108,6 +108,33 @@ def redemption_update_view(request, request_id):
         return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(PointsRedemptionRequestSerializer(redemption_request).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def info_view(request):
+    """
+    Player-facing explainer for the Reward Points top-bar badge: how to
+    earn them, and the current (staff-configurable) redemption minimum and
+    conversion rate. Deliberately separate from the staff-only
+    action_list_view - only actions marked is_visible_to_players are
+    included, so internal/one-off bookkeeping actions never leak here.
+    """
+    config = PointsRedemptionConfig.get_solo()
+    actions = PointAction.objects.filter(is_active=True, is_visible_to_players=True).order_by('slug')
+    return Response({
+        'min_redemption_points': config.min_redemption_points,
+        'rp_to_credit_rate': str(config.rp_to_credit_rate),
+        'earn_actions': [
+            {
+                'slug': action.slug,
+                'label': action.label,
+                'points_value': action.points_value,
+                'description': action.description,
+            }
+            for action in actions
+        ],
+    })
 
 
 @api_view(['GET'])

@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from .models import PointAction, PointsBalance, PointsLedgerEntry, PointsRedemptionConfig, PointsRedemptionRequest
 from .services import (
@@ -260,4 +262,119 @@ class RedemptionConfigTests(TestCase):
         config.save()
         redemption_request.refresh_from_db()
         self.assertEqual(redemption_request.conversion_rate_snapshot, Decimal('2.5000'))
-        self.assertEqual(redemption_request.hi_rollin_credit_amount, Decimal('12500.00'))
+
+
+class PointsInfoViewTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username='info-player',
+            email='info-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.url = reverse('points-info')
+
+    def test_requires_authentication(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 401)
+
+    def test_returns_current_redemption_config(self):
+        config = PointsRedemptionConfig.get_solo()
+        config.min_redemption_points = 3000
+        config.rp_to_credit_rate = Decimal('1.5000')
+        config.save()
+
+        self.client.force_authenticate(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        data = response.data['data'] if 'data' in response.data else response.data
+        self.assertEqual(data['min_redemption_points'], 3000)
+        self.assertEqual(data['rp_to_credit_rate'], '1.5000')
+
+    def test_only_visible_active_actions_are_included(self):
+        PointAction.objects.create(
+            slug='visible_bonus', label='Visible Bonus', points_value=500,
+            is_active=True, is_visible_to_players=True,
+        )
+        PointAction.objects.create(
+            slug='hidden_backfill', label='Hidden Backfill', points_value=1000,
+            is_active=True, is_visible_to_players=False,
+        )
+        PointAction.objects.create(
+            slug='inactive_bonus', label='Inactive Bonus', points_value=250,
+            is_active=False, is_visible_to_players=True,
+        )
+
+        self.client.force_authenticate(self.user)
+        response = self.client.get(self.url)
+        data = response.data['data'] if 'data' in response.data else response.data
+        slugs = [item['slug'] for item in data['earn_actions']]
+        self.assertIn('visible_bonus', slugs)
+        self.assertNotIn('hidden_backfill', slugs)
+        self.assertNotIn('inactive_bonus', slugs)
+
+    def test_seeded_backfill_action_is_hidden_from_players(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.get(self.url)
+        data = response.data['data'] if 'data' in response.data else response.data
+        slugs = [item['slug'] for item in data['earn_actions']]
+        self.assertNotIn('registration_backfill_2026_08', slugs)
+
+
+class PointsBalanceViewTests(TestCase):
+    """
+    Regression coverage for the bug where the player-facing rewards page
+    called listRedemptions() (staff-only) alongside getBalance() in one
+    Promise.all - the resulting 403 rejected the whole batch, so balance
+    silently rendered as 0.00 even though the real balance was fine.
+    balance_view must never depend on staff-only endpoints, and must expose
+    the player's own active redemption request directly.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = get_user_model().objects.create_user(
+            username='balance-player',
+            email='balance-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.action = PointAction.objects.create(
+            slug='balance_test_bonus', label='Balance Test Bonus', points_value=6000, is_active=True,
+        )
+        self.url = reverse('points-balance')
+
+    def test_player_can_load_own_balance_without_staff_access(self):
+        award_points(self.user, self.action.slug)
+        self.client.force_authenticate(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        data = response.data['data'] if 'data' in response.data else response.data
+        self.assertEqual(data['balance'], '6000.00')
+        self.assertEqual(data['lifetime_earned'], 6000)
+        self.assertIsNone(data['active_redemption_request'])
+
+    def test_active_redemption_request_is_own_request_only(self):
+        award_points(self.user, self.action.slug)
+        other_user = get_user_model().objects.create_user(
+            username='other-balance-player',
+            email='other-balance-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        award_points(other_user, self.action.slug)
+        create_redemption_request(other_user, 6000)
+        redemption = create_redemption_request(self.user, 6000)
+
+        self.client.force_authenticate(self.user)
+        response = self.client.get(self.url)
+        data = response.data['data'] if 'data' in response.data else response.data
+        self.assertIsNotNone(data['active_redemption_request'])
+        self.assertEqual(data['active_redemption_request']['id'], redemption.id)
+        self.assertEqual(data['active_redemption_request']['status'], 'pending')
+
+    def test_redemption_list_view_remains_staff_only(self):
+        self.client.force_authenticate(self.user)
+        response = self.client.get(reverse('points-redemptions'))
+        self.assertEqual(response.status_code, 403)

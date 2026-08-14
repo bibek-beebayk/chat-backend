@@ -23,9 +23,29 @@ class UserOnboardingStateSerializer(serializers.ModelSerializer):
         read_only_fields = ['completed_at', 'updated_at']
 
 
+class ConnectionUserSerializer(UserSerializer):
+    """
+    UserSerializer + presence_status, scoped to social/connections responses
+    only. Deliberately NOT added to accounts.serializers.UserSerializer
+    itself - that base class is reused by posts/chat/announcements/rewards/
+    etc., so a presence lookup there would leak an extra query into every
+    one of those unrelated responses. Callers must select_related
+    ('requester__presence', 'receiver__presence') (or equivalent) on the
+    queryset, or this falls back to a per-row query.
+    """
+    presence_status = serializers.SerializerMethodField()
+
+    class Meta(UserSerializer.Meta):
+        fields = UserSerializer.Meta.fields + ['presence_status']
+
+    def get_presence_status(self, obj):
+        presence = getattr(obj, 'presence', None)
+        return presence.status if presence else 'OFFLINE'
+
+
 class UserConnectionSerializer(serializers.ModelSerializer):
-    requester = UserSerializer(read_only=True)
-    receiver = UserSerializer(read_only=True)
+    requester = ConnectionUserSerializer(read_only=True)
+    receiver = ConnectionUserSerializer(read_only=True)
 
     class Meta:
         model = UserConnection
