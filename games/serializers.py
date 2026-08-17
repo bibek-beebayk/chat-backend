@@ -10,6 +10,7 @@ class GameSerializer(serializers.ModelSerializer):
             'name',
             'slug',
             'description',
+            'thumbnail',
             'is_active',
         ]
         read_only_fields = fields

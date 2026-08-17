@@ -9,4 +9,8 @@ from .serializers import GameSerializer
 @permission_classes([permissions.IsAuthenticated])
 def game_list_view(request):
     games = Game.objects.filter(is_active=True)
-    return Response(GameSerializer(games, many=True).data)
+    # Pass request context so ImageField.to_representation resolves
+    # `thumbnail` to an absolute URL - required in local dev, where
+    # FileSystemStorage returns a bare relative /media/... path (S3Storage
+    # in staging/prod already returns an absolute URL either way).
+    return Response(GameSerializer(games, many=True, context={'request': request}).data)
