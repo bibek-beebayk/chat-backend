@@ -32,12 +32,13 @@ class RocketRoundSerializer(serializers.ModelSerializer):
     phase = serializers.SerializerMethodField()
     multiplier = serializers.SerializerMethodField()
     seconds_remaining = serializers.SerializerMethodField()
+    elapsed_seconds = serializers.SerializerMethodField()
 
     class Meta:
         model = RocketRound
         fields = [
             'round_id', 'status', 'phase', 'wager_amount', 'auto_cashout_multiplier',
-            'multiplier', 'seconds_remaining', 'started_at',
+            'multiplier', 'seconds_remaining', 'elapsed_seconds', 'started_at',
             'cashout_multiplier', 'payout_amount', 'balance_after',
             'created_at', 'resolved_at',
         ]
@@ -65,6 +66,23 @@ class RocketRoundSerializer(serializers.ModelSerializer):
             return None
         elapsed = self._elapsed(obj)
         return str(-elapsed) if elapsed < 0 else None
+
+    def get_elapsed_seconds(self, obj):
+        """
+        Server-authoritative "how far into flight is this round right now"
+        snapshot (0 while still counting down), purely so the frontend can
+        anchor a local performance.now()-based interpolation clock to a
+        trusted value instead of computing elapsed time itself from
+        `Date.now() - new Date(started_at).getTime()`, which silently
+        assumes the client's wall clock agrees with the server's. Display-
+        only - cashout/crash decisions are always re-derived server-side at
+        the moment of the actual request, never from a value the client
+        reports back.
+        """
+        if obj.status != RocketRound.STATUS_ACTIVE:
+            return None
+        elapsed = self._elapsed(obj)
+        return str(max(Decimal('0'), elapsed))
 
 
 class RocketHistoryItemSerializer(serializers.ModelSerializer):

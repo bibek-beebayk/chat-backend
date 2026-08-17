@@ -34,6 +34,15 @@ class RocketMathTests(TestCase):
         self.assertEqual(multiplier_at_elapsed(Decimal('0')), Decimal('1.00'))
         self.assertEqual(multiplier_at_elapsed(Decimal('-2')), Decimal('1.00'))
 
+    def test_multiplier_does_not_overflow_for_a_very_long_unresolved_round(self):
+        # A round nobody ever re-checked for hours/days (e.g. an abandoned
+        # session) must still produce a normal Decimal, not raise - it was
+        # discovered doing exactly this: math.exp() overflowing to inf,
+        # which Decimal.quantize() can't handle.
+        huge = multiplier_at_elapsed(Decimal('86400'))  # 24 hours
+        self.assertIsInstance(huge, Decimal)
+        self.assertGreater(huge, Decimal('1000'))
+
     def test_multiplier_strictly_increases_with_elapsed_time(self):
         samples = [Decimal(v) for v in ['0.5', '1', '2', '5', '8', '12', '18']]
         values = [multiplier_at_elapsed(s) for s in samples]

@@ -103,6 +103,15 @@ def multiplier_at_elapsed(elapsed_seconds):
         return Decimal('1.00')
     t = float(elapsed_seconds)
     exponent = float(GROWTH_RATE) * (t ** float(ACCEL_EXPONENT))
+    # A round left unresolved for a very long time (e.g. an abandoned
+    # session that never polls again) can reach an arbitrarily large
+    # elapsed_seconds once something finally does check it again - without
+    # this cap, math.exp() overflows to inf, which Decimal.quantize() can't
+    # handle (raises InvalidOperation), 500ing the endpoint. Capped well
+    # above the exponent needed to reach MAX_CRASH_MULTIPLIER (~6.9), so it
+    # never affects any real crash-point comparison - it only ever matters
+    # once the round is already unambiguously long past crashed.
+    exponent = min(exponent, 20.0)
     value = math.exp(exponent)
     return Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
 
