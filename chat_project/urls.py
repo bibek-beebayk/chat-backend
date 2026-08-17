@@ -28,5 +28,6 @@ urlpatterns = [
     path('api/games/', include('games.urls')),
     path('api/plinko/', include('plinko.urls')),
     path('api/slots/', include('slots.urls')),
+    path('api/rocket/', include('rocket.urls')),
     path('admin/user-search/', admin_player_search_view),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

@@ -140,6 +140,60 @@ def settle_wager(user, *, wager_amount, payout_amount, entry_type=PointsLedgerEn
 
 
 @transaction.atomic
+def debit_balance(user, *, amount, entry_type=PointsLedgerEntry.ENTRY_GAME_ROUND, metadata=None, note=''):
+    """
+    Atomically debits `amount` with no corresponding credit in the same
+    call - for games whose outcome isn't known yet at wager time (e.g. a
+    crash game's play is charged immediately, with any payout settled
+    later via credit_balance() once the round resolves). Plinko/Slots
+    settle both legs in one instant call via settle_wager(); this is the
+    split-in-time equivalent of just its debit half. Raises
+    InsufficientPoints if the user can't cover it - callers must not
+    create a round/ledger row when this raises.
+    """
+    if amount <= 0:
+        raise ValueError('amount must be positive.')
+
+    balance, _ = PointsBalance.objects.select_for_update().get_or_create(user=user)
+    if balance.balance < amount:
+        raise InsufficientPoints()
+
+    balance.balance -= amount
+    balance.save(update_fields=['balance', 'updated_at'])
+
+    entry = PointsLedgerEntry.objects.create(
+        user=user,
+        entry_type=entry_type,
+        delta=-amount,
+        balance_after=balance.balance,
+        metadata=metadata or {},
+        note=note,
+    )
+    return balance, entry
+
+
+@transaction.atomic
+def credit_balance(user, *, amount, entry_type=PointsLedgerEntry.ENTRY_GAME_ROUND, metadata=None, note=''):
+    """The credit-later half of the debit_balance() split - see its docstring."""
+    if amount <= 0:
+        raise ValueError('amount must be positive.')
+
+    balance, _ = PointsBalance.objects.select_for_update().get_or_create(user=user)
+    balance.balance += amount
+    balance.save(update_fields=['balance', 'updated_at'])
+
+    entry = PointsLedgerEntry.objects.create(
+        user=user,
+        entry_type=entry_type,
+        delta=amount,
+        balance_after=balance.balance,
+        metadata=metadata or {},
+        note=note,
+    )
+    return balance, entry
+
+
+@transaction.atomic
 def create_redemption_request(user, points_amount, note='', reward_description=''):
     config = PointsRedemptionConfig.get_solo()
     if points_amount < config.min_redemption_points:
