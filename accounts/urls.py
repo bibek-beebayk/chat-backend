@@ -18,7 +18,8 @@ urlpatterns = [
     path('home-info/', views.home_info_view, name='home-info'),
     path('change-password/', views.change_password_view, name='change-password'),
     path('verify-current-password/', views.verify_current_password_view, name='verify-current-password'),
-    path('agent-availability/', views.update_agent_availability_view, name='agent-availability'),
+    # Agent flow removed - view still exists in accounts/views.py, just unexposed.
+    # path('agent-availability/', views.update_agent_availability_view, name='agent-availability'),
     path('delete-account/', views.delete_account_view, name='delete-account'),
     path('verify-otp/', views.verify_otp_view, name='verify-otp'),
     path('resend-otp/', views.resend_otp_view, name='resend-otp'),

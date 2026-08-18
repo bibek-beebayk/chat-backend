@@ -98,7 +98,15 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['username', 'password', 'confirm_password', 'user_type', 'email']
-    
+
+    def validate_user_type(self, value):
+        # Agent self-registration is discontinued - the model still supports
+        # the 'agent' choice (existing accounts, admin tooling), but public
+        # registration only ever creates player accounts now.
+        if value != 'player':
+            raise serializers.ValidationError("Only player accounts can be created here.")
+        return value
+
     def validate(self, data):
         if data['password'] != data['confirm_password']:
             raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
