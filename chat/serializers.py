@@ -9,6 +9,7 @@ from .models import (
     GroupJoinRequest,
 )
 from accounts.serializers import UserSerializer
+from social.serializers import ConnectionUserSerializer
 
 
 class SupportRoomSerializer(serializers.ModelSerializer):
@@ -93,6 +94,7 @@ class RoomSerializer(serializers.ModelSerializer):
     counterpart = serializers.SerializerMethodField()
     last_activity = serializers.DateTimeField(read_only=True)
     last_message_sender_id = serializers.IntegerField(read_only=True)
+    last_message_preview = serializers.SerializerMethodField()
     is_message_request = serializers.SerializerMethodField()
     message_request_direction = serializers.SerializerMethodField()
     direct_request_status = serializers.CharField(read_only=True)
@@ -105,7 +107,7 @@ class RoomSerializer(serializers.ModelSerializer):
             'group_admin', 'group_description', 'group_member_count', 'user_is_group_admin',
             'created_at', 'status', 'participant_count', 'unread_count', 'is_staff_online',
             'queue', 'queue_name', 'queue_type', 'can_switch_station', 'last_activity',
-            'last_message_sender_id', 'is_message_request', 'message_request_direction',
+            'last_message_sender_id', 'last_message_preview', 'is_message_request', 'message_request_direction',
             'direct_request_status', 'direct_request_initiator'
         ]
         read_only_fields = ['id', 'created_at']
@@ -168,6 +170,15 @@ class RoomSerializer(serializers.ModelSerializer):
             staff__isnull=False
         ).exclude(id=obj.queue.id).exists()
 
+    def get_last_message_preview(self, obj):
+        content = getattr(obj, 'last_message_preview', None)
+        if not content:
+            return None
+        content = content.strip()
+        if len(content) > 80:
+            return content[:80].rstrip() + '...'
+        return content
+
     def get_counterpart(self, obj):
         if obj.room_type != 'direct_agent':
             return None
@@ -182,7 +193,11 @@ class RoomSerializer(serializers.ModelSerializer):
             target = obj.direct_player
         if target is None:
             return None
-        return UserSerializer(target).data
+        # ConnectionUserSerializer adds presence_status - callers should
+        # select_related('direct_player__presence', 'direct_agent__presence')
+        # on the queryset (see chat/views.py::room_list_view) or this falls
+        # back to a per-row query.
+        return ConnectionUserSerializer(target).data
 
     def get_is_message_request(self, obj):
         return obj.room_type == 'direct_agent' and obj.direct_request_status == 'pending'

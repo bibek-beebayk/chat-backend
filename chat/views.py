@@ -218,6 +218,9 @@ def room_list_view(request):
         latest_sender_subquery = Message.objects.filter(
             room=OuterRef('pk')
         ).order_by('-timestamp').values('sender_id')[:1]
+        latest_content_subquery = Message.objects.filter(
+            room=OuterRef('pk')
+        ).order_by('-timestamp').values('content')[:1]
         # Get staff's active support roomS to filter chats
         # Changed: fetch all active rooms
         active_support_rooms = user.active_support_rooms.filter(is_test_room=_is_test_actor(user))
@@ -231,7 +234,7 @@ def room_list_view(request):
             queue__in=active_support_rooms,
             is_test_room=_is_test_actor(user),
         )
-            
+
         rooms = base_query.annotate(
             unread_count=Count(
                 'messages',
@@ -239,11 +242,15 @@ def room_list_view(request):
             ),
             last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
             last_message_sender_id=Subquery(latest_sender_subquery),
+            last_message_preview=Subquery(latest_content_subquery),
         ).order_by('-status', '-unread_count', '-last_activity')
     else:
         latest_sender_subquery = Message.objects.filter(
             room=OuterRef('pk')
         ).order_by('-timestamp').values('sender_id')[:1]
+        latest_content_subquery = Message.objects.filter(
+            room=OuterRef('pk')
+        ).order_by('-timestamp').values('content')[:1]
         rooms = []
         support_room, created = Room.objects.get_or_create(
             client=user,
@@ -320,6 +327,9 @@ def room_list_view(request):
         support_room.last_message_sender_id = support_room.messages.order_by(
             '-timestamp'
         ).values_list('sender_id', flat=True).first()
+        support_room.last_message_preview = support_room.messages.order_by(
+            '-timestamp'
+        ).values_list('content', flat=True).first()
         rooms.append(support_room)
 
         direct_rooms = Room.objects.filter(
@@ -329,13 +339,14 @@ def room_list_view(request):
             is_test_room=_is_test_actor(user),
             participants__user=user,
             participants__is_active=True,
-        ).distinct().annotate(
+        ).select_related('direct_player__presence', 'direct_agent__presence').distinct().annotate(
             unread_count=Count(
                 'messages',
                 filter=Q(messages__is_read=False) & ~Q(messages__sender=user)
             ),
             last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
             last_message_sender_id=Subquery(latest_sender_subquery),
+            last_message_preview=Subquery(latest_content_subquery),
         ).order_by('-unread_count', '-last_activity')
         rooms.extend(list(direct_rooms))
 
@@ -352,6 +363,7 @@ def room_list_view(request):
             ),
             last_activity=Coalesce(Max('messages__timestamp'), 'created_at'),
             last_message_sender_id=Subquery(latest_sender_subquery),
+            last_message_preview=Subquery(latest_content_subquery),
         ).order_by('-unread_count', '-last_activity')
         rooms.extend(list(group_rooms))
     

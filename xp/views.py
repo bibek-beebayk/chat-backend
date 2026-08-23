@@ -1,9 +1,22 @@
+from django.db.models import F
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from .models import XPAction, XPBalance, XPLedgerEntry
 from .serializers import XPActionSerializer, XPStatusSerializer
+
+# Achievements shown on the player profile - each backed by a real, already-
+# earnable signal rather than a fabricated badge. Three are existing XPAction
+# slugs (already seeded and functional, just never surfaced in any UI before
+# now); "first_win" isn't an XP action at all, it's a direct cross-game query
+# (see _has_first_win below).
+ACHIEVEMENT_DEFINITIONS = [
+    {'slug': 'streak_7day', 'label': '7-Day Streak'},
+    {'slug': 'first_win', 'label': 'First Win'},
+    {'slug': 'rocket_cashout_above_10x', 'label': 'Moon Walker'},
+    {'slug': 'rocket_five_alive', 'label': 'Five Alive'},
+]
 
 # The two real player-facing "daily checklist" actions - NOT qualified_gameplay,
 # which is background per-round trickle with no natural target the player
@@ -67,6 +80,56 @@ def daily_progress_view(request):
             'target_count': target,
             'current_count': min(current_count, target),
             'completed': completed,
+        })
+
+    return Response(results)
+
+
+def _has_first_win(user):
+    # Lazy imports - xp is a low-level app other games import from (via
+    # award_xp), so importing their models back at module level here risks
+    # a circular import. A local import avoids that entirely.
+    from plinko.models import PlinkoRound
+    from rocket.models import RocketRound
+    from slots.models import SlotRound
+
+    if PlinkoRound.objects.filter(user=user, payout_amount__gt=F('wager_amount')).exists():
+        return True
+    if SlotRound.objects.filter(user=user, payout_amount__gt=0).exists():
+        return True
+    if RocketRound.objects.filter(user=user, status=RocketRound.STATUS_CASHED_OUT).exists():
+        return True
+    return False
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def achievements_view(request):
+    user = request.user
+    earned_slugs = {
+        entry.action.slug: entry.created_at
+        for entry in XPLedgerEntry.objects.filter(
+            user=user,
+            entry_type=XPLedgerEntry.ENTRY_EARN,
+            action__slug__in=[d['slug'] for d in ACHIEVEMENT_DEFINITIONS if d['slug'] != 'first_win'],
+        ).select_related('action').order_by('created_at')
+    }
+    has_first_win = _has_first_win(user)
+
+    results = []
+    for definition in ACHIEVEMENT_DEFINITIONS:
+        slug = definition['slug']
+        if slug == 'first_win':
+            unlocked = has_first_win
+            earned_at = None
+        else:
+            unlocked = slug in earned_slugs
+            earned_at = earned_slugs.get(slug)
+        results.append({
+            'slug': slug,
+            'label': definition['label'],
+            'unlocked': unlocked,
+            'earned_at': earned_at,
         })
 
     return Response(results)

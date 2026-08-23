@@ -119,6 +119,7 @@ def play_round(user, *, wager_amount, client_request_id=''):
         entry['payout'] = str((Decimal(wager_amount) * line_multiplier).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     metadata = {
+        'game': GAME_SLUG,
         'game_version': GAME_VERSION,
         'reel_stops': stops,
         'winning_lines': winning_lines,

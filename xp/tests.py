@@ -215,3 +215,76 @@ class DailyProgressViewTests(TestCase):
         self.client.force_authenticate(user=None)
         response = self.client.get(reverse('xp-daily-progress'))
         self.assertEqual(response.status_code, 401)
+
+
+class GlobalRankTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def _make_player(self, username, total_xp):
+        user = get_user_model().objects.create_user(
+            username=username, email=f'{username}@example.com', password='test-pass-123', user_type='player',
+        )
+        XPBalance.objects.create(user=user, total_xp=total_xp)
+        return user
+
+    def test_global_rank_reflects_position_by_total_xp(self):
+        leader = self._make_player('rank-leader', 500)
+        middle = self._make_player('rank-middle', 200)
+        last = self._make_player('rank-last', 10)
+
+        self.client.force_authenticate(leader)
+        self.assertEqual(self.client.get(reverse('xp-status')).data['global_rank'], 1)
+
+        self.client.force_authenticate(middle)
+        self.assertEqual(self.client.get(reverse('xp-status')).data['global_rank'], 2)
+
+        self.client.force_authenticate(last)
+        self.assertEqual(self.client.get(reverse('xp-status')).data['global_rank'], 3)
+
+    def test_tied_xp_does_not_crash_and_ranks_reasonably(self):
+        a = self._make_player('rank-tie-a', 100)
+        self._make_player('rank-tie-b', 100)
+
+        self.client.force_authenticate(a)
+        rank = self.client.get(reverse('xp-status')).data['global_rank']
+        self.assertIn(rank, (1, 2))
+
+
+class AchievementsViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='achievements-player',
+            email='achievements-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_all_achievements_locked_for_new_user(self):
+        response = self.client.get(reverse('xp-achievements'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 4)
+        self.assertTrue(all(item['unlocked'] is False for item in response.data))
+
+    def test_streak_7day_action_unlocks_the_matching_achievement(self):
+        award_xp(self.user, 'streak_7day', idempotency_key='streak-test')
+        response = self.client.get(reverse('xp-achievements'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertTrue(by_slug['streak_7day']['unlocked'])
+        self.assertIsNotNone(by_slug['streak_7day']['earned_at'])
+        self.assertFalse(by_slug['rocket_cashout_above_10x']['unlocked'])
+
+    def test_moon_walker_and_five_alive_unlock_independently(self):
+        award_xp(self.user, 'rocket_cashout_above_10x', idempotency_key='moon-walker-test')
+        response = self.client.get(reverse('xp-achievements'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertTrue(by_slug['rocket_cashout_above_10x']['unlocked'])
+        self.assertFalse(by_slug['rocket_five_alive']['unlocked'])
+        self.assertFalse(by_slug['streak_7day']['unlocked'])
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.get(reverse('xp-achievements'))
+        self.assertEqual(response.status_code, 401)

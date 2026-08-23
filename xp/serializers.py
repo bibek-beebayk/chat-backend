@@ -27,6 +27,7 @@ class XPStatusSerializer(serializers.ModelSerializer):
     next_rank_xp = serializers.SerializerMethodField()
     xp_to_next_rank = serializers.SerializerMethodField()
     rank_progress_percent = serializers.SerializerMethodField()
+    global_rank = serializers.SerializerMethodField()
 
     class Meta:
         model = XPBalance
@@ -39,6 +40,7 @@ class XPStatusSerializer(serializers.ModelSerializer):
             'next_rank_xp',
             'xp_to_next_rank',
             'rank_progress_percent',
+            'global_rank',
             'updated_at',
         ]
 
@@ -73,3 +75,10 @@ class XPStatusSerializer(serializers.ModelSerializer):
             return 100
         progressed = obj.total_xp - current.min_xp
         return max(0, min(100, round(progressed * 100 / span)))
+
+    def get_global_rank(self, obj):
+        # 1-indexed position among all players by total XP - not cached
+        # anywhere (XPBalance.rank_slug is a tier cache, not a position), so
+        # this is a live COUNT each time status is fetched. Cheap: one
+        # indexed count query, no new model needed.
+        return XPBalance.objects.filter(total_xp__gt=obj.total_xp).count() + 1

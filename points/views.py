@@ -38,13 +38,37 @@ def balance_view(request):
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def ledger_view(request):
-    entries = (
+    # limit/offset paging, following the same {results, meta} convention as
+    # social/views.py's _parse_pagination-backed search endpoints.
+    try:
+        limit = int(request.query_params.get('limit', 10))
+    except (TypeError, ValueError):
+        limit = 10
+    try:
+        offset = int(request.query_params.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+    limit = max(1, min(limit, 50))
+    offset = max(0, offset)
+
+    queryset = (
         PointsLedgerEntry.objects
         .filter(user=request.user)
         .select_related('action')
-        .order_by('-created_at')[:50]
+        .order_by('-created_at')
     )
-    return Response(PointsLedgerEntrySerializer(entries, many=True).data)
+    total_count = queryset.count()
+    page = queryset[offset:offset + limit]
+
+    return Response({
+        'results': PointsLedgerEntrySerializer(page, many=True).data,
+        'meta': {
+            'limit': limit,
+            'offset': offset,
+            'count': total_count,
+            'has_more': (offset + limit) < total_count,
+        },
+    })
 
 
 @api_view(['POST'])
