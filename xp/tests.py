@@ -5,8 +5,9 @@ from rest_framework.test import APIClient
 
 from notifications.models import Notification
 from .models import XPAction, XPBalance, XPLedgerEntry
-from .ranks import RANK_THRESHOLDS, next_rank_for_xp, rank_for_xp
-from .services import ChallengeNotYetEligible, DailyCapExceeded, apply_adjustment, award_xp
+from points.models import PointsBalance, PointsLedgerEntry
+from .ranks import RANK_THRESHOLDS, next_rank_for_xp, rank_for_xp, sub_level_for_xp, sub_ranges_for_tier
+from .services import ChallengeNotYetEligible, DailyCapExceeded, RANK_UP_BONUS_RP, apply_adjustment, award_xp
 
 
 class RankThresholdTests(TestCase):
@@ -287,4 +288,173 @@ class AchievementsViewTests(TestCase):
     def test_requires_authentication(self):
         self.client.force_authenticate(user=None)
         response = self.client.get(reverse('xp-achievements'))
+        self.assertEqual(response.status_code, 401)
+
+
+class SubLevelTests(TestCase):
+    def test_each_tier_below_the_top_has_three_contiguous_sub_ranges(self):
+        for tier in RANK_THRESHOLDS[:-1]:
+            ranges = sub_ranges_for_tier(tier.slug)
+            self.assertEqual(len(ranges), 3)
+            self.assertEqual([r['sub_level_label'] for r in ranges], ['I', 'II', 'III'])
+            self.assertEqual(ranges[0]['min_xp'], tier.min_xp)
+            # Contiguous, no gaps: each range starts immediately after the previous ends.
+            self.assertEqual(ranges[1]['min_xp'], ranges[0]['max_xp'] + 1)
+            self.assertEqual(ranges[2]['min_xp'], ranges[1]['max_xp'] + 1)
+            next_tier = RANK_THRESHOLDS[RANK_THRESHOLDS.index(tier) + 1]
+            self.assertEqual(ranges[2]['max_xp'], next_tier.min_xp - 1)
+
+    def test_top_tier_has_no_sub_ranges(self):
+        top = RANK_THRESHOLDS[-1]
+        self.assertIsNone(sub_ranges_for_tier(top.slug))
+
+    def test_sub_level_for_xp_matches_the_right_sub_range(self):
+        bronze_ranges = sub_ranges_for_tier('bronze')
+        for sub_range in bronze_ranges:
+            result = sub_level_for_xp(sub_range['min_xp'])
+            self.assertEqual(result['sub_level_label'], sub_range['sub_level_label'])
+            self.assertEqual(result['sub_level_min_xp'], sub_range['min_xp'])
+            self.assertEqual(result['sub_level_max_xp'], sub_range['max_xp'])
+
+    def test_sub_level_for_xp_none_for_top_tier(self):
+        top = RANK_THRESHOLDS[-1]
+        self.assertIsNone(sub_level_for_xp(top.min_xp))
+        self.assertIsNone(sub_level_for_xp(top.min_xp + 100000))
+
+    def test_sub_level_progress_percent_is_bounded(self):
+        bronze_ranges = sub_ranges_for_tier('bronze')
+        first = bronze_ranges[0]
+        result = sub_level_for_xp(first['min_xp'])
+        self.assertEqual(result['sub_level_progress_percent'], 0)
+        result = sub_level_for_xp(first['max_xp'])
+        self.assertLess(result['sub_level_progress_percent'], 100)
+
+
+class RankUpBonusTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='rankup-player',
+            email='rankup-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.action = XPAction.objects.create(slug='rankup-test-action', label='Test', xp_value=10, is_active=True)
+
+    def _ledger_balance(self):
+        balance = PointsBalance.objects.filter(user=self.user).first()
+        return balance.balance if balance else 0
+
+    def test_no_bonus_when_staying_in_bronze(self):
+        award_xp(self.user, self.action.slug)
+        self.assertEqual(self._ledger_balance(), 0)
+        self.assertEqual(XPBalance.objects.get(user=self.user).pending_celebration_rank, '')
+
+    def test_rank_up_to_silver_credits_the_matching_bonus(self):
+        big = XPAction.objects.create(slug='rankup-big', label='Big', xp_value=1000, is_active=True)
+        award_xp(self.user, big.slug)
+        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['silver'])
+        entry = PointsLedgerEntry.objects.get(user=self.user)
+        self.assertEqual(entry.metadata.get('reason'), 'rank_up_bonus')
+        self.assertEqual(entry.metadata.get('rank'), 'silver')
+        self.assertEqual(XPBalance.objects.get(user=self.user).pending_celebration_rank, 'silver')
+
+    def test_skipping_multiple_tiers_awards_only_the_final_tiers_bonus(self):
+        huge = XPAction.objects.create(slug='rankup-huge', label='Huge', xp_value=20000, is_active=True)
+        award_xp(self.user, huge.slug)  # bronze -> rollin_elite in one jump
+        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['rollin_elite'])
+        self.assertEqual(PointsLedgerEntry.objects.filter(user=self.user).count(), 1)
+
+    def test_apply_adjustment_also_credits_rank_up_bonus(self):
+        staff = get_user_model().objects.create_user(
+            username='rankup-staff', email='rankup-staff@example.com', password='test-pass-123', user_type='staff',
+        )
+        apply_adjustment(self.user, staff, 1000)
+        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['silver'])
+
+
+class RankTiersViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='tiers-player',
+            email='tiers-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        XPBalance.objects.create(user=self.user, total_xp=1500)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_returns_all_seven_tiers_with_current_and_unlocked_flags(self):
+        response = self.client.get(reverse('xp-rank-tiers'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['tiers']), 7)
+        self.assertEqual(response.data['caller']['total_xp'], 1500)
+        self.assertEqual(response.data['caller']['rank'], 'silver')
+
+        by_slug = {t['slug']: t for t in response.data['tiers']}
+        self.assertTrue(by_slug['bronze']['is_unlocked'])
+        self.assertTrue(by_slug['silver']['is_unlocked'])
+        self.assertTrue(by_slug['silver']['is_current'])
+        self.assertFalse(by_slug['gold']['is_unlocked'])
+        self.assertFalse(by_slug['bronze']['is_current'])
+
+    def test_rollin_legend_has_no_sub_ranges_and_no_max_xp(self):
+        response = self.client.get(reverse('xp-rank-tiers'))
+        legend = next(t for t in response.data['tiers'] if t['slug'] == 'rollin_legend')
+        self.assertIsNone(legend['sub_ranges'])
+        self.assertIsNone(legend['max_xp'])
+
+    def test_bronze_has_no_rank_up_bonus(self):
+        response = self.client.get(reverse('xp-rank-tiers'))
+        bronze = next(t for t in response.data['tiers'] if t['slug'] == 'bronze')
+        self.assertIsNone(bronze['rank_up_bonus_rp'])
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.get(reverse('xp-rank-tiers'))
+        self.assertEqual(response.status_code, 401)
+
+
+class AcknowledgeLevelUpViewTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='ack-player',
+            email='ack-player@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.action = XPAction.objects.create(slug='ack-big', label='Big', xp_value=1000, is_active=True)
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_status_reflects_pending_level_up_after_a_rank_up(self):
+        award_xp(self.user, self.action.slug)
+        response = self.client.get(reverse('xp-status'))
+        self.assertEqual(response.data['pending_level_up'], {
+            'rank': 'silver', 'rank_label': 'Silver', 'bonus_rp': RANK_UP_BONUS_RP['silver'],
+        })
+
+    def test_status_has_no_pending_level_up_for_a_fresh_user(self):
+        response = self.client.get(reverse('xp-status'))
+        self.assertIsNone(response.data['pending_level_up'])
+
+    def test_acknowledge_clears_the_flag(self):
+        award_xp(self.user, self.action.slug)
+        response = self.client.post(reverse('xp-acknowledge-level-up'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['pending_level_up'])
+        self.assertEqual(XPBalance.objects.get(user=self.user).pending_celebration_rank, '')
+
+        # And it stays cleared on a subsequent status fetch.
+        response = self.client.get(reverse('xp-status'))
+        self.assertIsNone(response.data['pending_level_up'])
+
+    def test_acknowledge_is_a_no_op_when_nothing_pending(self):
+        response = self.client.post(reverse('xp-acknowledge-level-up'))
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['pending_level_up'])
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.post(reverse('xp-acknowledge-level-up'))
         self.assertEqual(response.status_code, 401)

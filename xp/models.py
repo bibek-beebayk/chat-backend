@@ -48,6 +48,11 @@ class XPBalance(models.Model):
     # rank-up detection has an "old value" to diff against.
     rank_slug = models.CharField(max_length=32, blank=True, default='')
     rank_updated_at = models.DateTimeField(blank=True, null=True)
+    # Set to a rank slug the moment a rank-up happens (see
+    # xp.services._apply_rank_up_bonus), cleared back to '' once the
+    # frontend has shown the "Level Up!" celebration and called
+    # /api/xp/acknowledge-level-up/. Empty means "nothing to celebrate".
+    pending_celebration_rank = models.CharField(max_length=32, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

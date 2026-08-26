@@ -4,7 +4,22 @@ from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from .models import XPAction, XPBalance, XPLedgerEntry
+from .ranks import RANK_THRESHOLDS, rank_for_xp, sub_ranges_for_tier
 from .serializers import XPActionSerializer, XPStatusSerializer
+from .services import RANK_UP_BONUS_RP
+
+# Static per-tier flavor copy for the Rollin Levels pages - real progression
+# data (XP ranges, sub-levels, rank-up bonus) drives everything else; this
+# is just a short tagline, same spirit as a game's description field.
+RANK_TIER_TAGLINES = {
+    'bronze': 'Best for new players',
+    'silver': 'For active players',
+    'gold': 'For established players',
+    'platinum': 'For loyal players',
+    'diamond': 'High-status community tier',
+    'rollin_elite': 'Top community tier',
+    'rollin_legend': "You've reached the highest rank",
+}
 
 # Achievements shown on the player profile - each backed by a real, already-
 # earnable signal rather than a fabricated badge. Three are existing XPAction
@@ -33,6 +48,17 @@ def _is_staff_user(user):
 @permission_classes([permissions.IsAuthenticated])
 def status_view(request):
     balance, _ = XPBalance.objects.get_or_create(user=request.user)
+    return Response(XPStatusSerializer(balance).data)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def acknowledge_level_up_view(request):
+    """Clears the pending "Level Up!" celebration flag once the frontend has shown it - see XPBalance.pending_celebration_rank."""
+    balance, _ = XPBalance.objects.get_or_create(user=request.user)
+    if balance.pending_celebration_rank:
+        balance.pending_celebration_rank = ''
+        balance.save(update_fields=['pending_celebration_rank'])
     return Response(XPStatusSerializer(balance).data)
 
 
@@ -133,6 +159,43 @@ def achievements_view(request):
         })
 
     return Response(results)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def rank_tiers_view(request):
+    """
+    All 7 rank tiers' static shape (real XP thresholds/sub-ranges/rank-up
+    bonus, plus flavor copy) merged with the caller's live position - powers
+    both the Rollin Levels overview list and every per-tier detail page from
+    a single fetch (the data is small and identical for every caller aside
+    from which tier is "current"/"unlocked").
+    """
+    balance, _ = XPBalance.objects.get_or_create(user=request.user)
+    current_tier = rank_for_xp(balance.total_xp)
+
+    tiers = []
+    for tier in RANK_THRESHOLDS:
+        sub_ranges = sub_ranges_for_tier(tier.slug)
+        tiers.append({
+            'slug': tier.slug,
+            'label': tier.label,
+            'min_xp': tier.min_xp,
+            'max_xp': sub_ranges[-1]['max_xp'] if sub_ranges else None,
+            'sub_ranges': sub_ranges,
+            'rank_up_bonus_rp': RANK_UP_BONUS_RP.get(tier.slug),
+            'tagline': RANK_TIER_TAGLINES.get(tier.slug, ''),
+            'is_current': tier.slug == current_tier.slug,
+            'is_unlocked': balance.total_xp >= tier.min_xp,
+        })
+
+    return Response({
+        'caller': {
+            'total_xp': balance.total_xp,
+            'rank': current_tier.slug,
+        },
+        'tiers': tiers,
+    })
 
 
 @api_view(['GET'])

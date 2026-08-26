@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import XPAction, XPBalance
-from .ranks import next_rank_for_xp, rank_for_xp
+from .ranks import RANKS_BY_SLUG, next_rank_for_xp, rank_for_xp, sub_level_for_xp
+from .services import RANK_UP_BONUS_RP
 
 
 class XPActionSerializer(serializers.ModelSerializer):
@@ -28,6 +29,10 @@ class XPStatusSerializer(serializers.ModelSerializer):
     xp_to_next_rank = serializers.SerializerMethodField()
     rank_progress_percent = serializers.SerializerMethodField()
     global_rank = serializers.SerializerMethodField()
+    sub_level = serializers.SerializerMethodField()
+    sub_level_label = serializers.SerializerMethodField()
+    sub_level_progress_percent = serializers.SerializerMethodField()
+    pending_level_up = serializers.SerializerMethodField()
 
     class Meta:
         model = XPBalance
@@ -41,6 +46,10 @@ class XPStatusSerializer(serializers.ModelSerializer):
             'xp_to_next_rank',
             'rank_progress_percent',
             'global_rank',
+            'sub_level',
+            'sub_level_label',
+            'sub_level_progress_percent',
+            'pending_level_up',
             'updated_at',
         ]
 
@@ -82,3 +91,28 @@ class XPStatusSerializer(serializers.ModelSerializer):
         # this is a live COUNT each time status is fetched. Cheap: one
         # indexed count query, no new model needed.
         return XPBalance.objects.filter(total_xp__gt=obj.total_xp).count() + 1
+
+    def get_sub_level(self, obj):
+        sub = sub_level_for_xp(obj.total_xp)
+        return sub['sub_level'] if sub else None
+
+    def get_sub_level_label(self, obj):
+        sub = sub_level_for_xp(obj.total_xp)
+        return sub['sub_level_label'] if sub else None
+
+    def get_sub_level_progress_percent(self, obj):
+        sub = sub_level_for_xp(obj.total_xp)
+        return sub['sub_level_progress_percent'] if sub else None
+
+    def get_pending_level_up(self, obj):
+        slug = obj.pending_celebration_rank
+        if not slug:
+            return None
+        tier = RANKS_BY_SLUG.get(slug)
+        if not tier:
+            return None
+        return {
+            'rank': tier.slug,
+            'rank_label': tier.label,
+            'bonus_rp': RANK_UP_BONUS_RP.get(tier.slug),
+        }

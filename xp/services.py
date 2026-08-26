@@ -4,6 +4,42 @@ from notifications.services import create_notification
 from .models import XPAction, XPBalance, XPLedgerEntry
 from .ranks import rank_for_xp
 
+# One-time RP credit for reaching each tier for the first time - a real
+# reward (not the mockup's fabricated frames/VIP/events perks). Bronze has
+# none since it's the starting tier, not something you rank "up" into.
+RANK_UP_BONUS_RP = {
+    'silver': 100,
+    'gold': 250,
+    'platinum': 500,
+    'diamond': 750,
+    'rollin_elite': 1000,
+    'rollin_legend': 1500,
+}
+
+
+def _apply_rank_up_bonus(user, new_tier, balance):
+    # Flags a fresh rank-up for the frontend's "Level Up!" celebration
+    # (see xp.serializers.XPStatusSerializer.get_pending_level_up and
+    # xp.views.acknowledge_level_up_view) - cleared once shown/acknowledged.
+    balance.pending_celebration_rank = new_tier.slug
+    balance.save(update_fields=['pending_celebration_rank'])
+
+    bonus = RANK_UP_BONUS_RP.get(new_tier.slug)
+    if not bonus:
+        return
+    # Lazy import: points/ has no reverse dependency on xp/, but every other
+    # cross-app call in this module stays lazy/local for consistency.
+    from points.models import PointsLedgerEntry
+    from points.services import credit_balance
+
+    credit_balance(
+        user,
+        amount=bonus,
+        entry_type=PointsLedgerEntry.ENTRY_EARN,
+        metadata={'reason': 'rank_up_bonus', 'rank': new_tier.slug},
+        note=f'Rank-up bonus for reaching {new_tier.label}',
+    )
+
 
 class DailyCapExceeded(Exception):
     def __init__(self, action_slug):
@@ -93,6 +129,7 @@ def award_xp(user, action_slug, *, idempotency_key='', metadata=None, note='', a
             title=f'Rank up! You reached {new_tier.label}',
             body=f'You earned {action.xp_value} XP and ranked up to {new_tier.label}.',
         )
+        _apply_rank_up_bonus(user, new_tier, balance)
 
     return entry
 
@@ -136,5 +173,6 @@ def apply_adjustment(user, staff_user, xp_delta, note=''):
             title=f'Rank up! You reached {new_tier.label}',
             body=f'You ranked up to {new_tier.label}.',
         )
+        _apply_rank_up_bonus(user, new_tier, balance)
 
     return balance, entry
