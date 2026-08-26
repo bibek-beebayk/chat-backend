@@ -81,3 +81,58 @@ def player_stats_view(request):
         'total_wins': total_wins,
         'highest_multiplier': str(highest_multiplier) if highest_multiplier is not None else None,
     })
+
+
+RECENT_WINS_LIMIT = 8
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def recent_wins_view(request, slug):
+    """
+    Most recent winning rounds for one game, across all real (non-test)
+    players - powers the game details page's "Recent Wins" list. Each
+    game's round table has its own win-signal and multiplier field, same
+    as player_stats_view above; lazy-imported for the same circular-import
+    reason. is_test_user=False keeps seeded/QA accounts out of a feed real
+    players see.
+    """
+    from plinko.models import PlinkoRound
+    from rocket.models import RocketRound
+    from slots.models import SlotRound
+
+    if slug == 'plinko':
+        qs = (
+            PlinkoRound.objects
+            .filter(payout_amount__gt=F('wager_amount'), user__is_test_user=False)
+            .select_related('user')
+            .order_by('-created_at')[:RECENT_WINS_LIMIT]
+        )
+        entries = [(r.user, r.multiplier, r.created_at) for r in qs]
+    elif slug == 'slots':
+        qs = (
+            SlotRound.objects
+            .filter(payout_amount__gt=0, user__is_test_user=False)
+            .select_related('user')
+            .order_by('-created_at')[:RECENT_WINS_LIMIT]
+        )
+        entries = [(r.user, r.total_multiplier, r.created_at) for r in qs]
+    elif slug == 'rocket':
+        qs = (
+            RocketRound.objects
+            .filter(status=RocketRound.STATUS_CASHED_OUT, user__is_test_user=False)
+            .select_related('user')
+            .order_by('-created_at')[:RECENT_WINS_LIMIT]
+        )
+        entries = [(r.user, r.cashout_multiplier, r.created_at) for r in qs]
+    else:
+        return Response({'error': 'Unknown game.'}, status=404)
+
+    return Response([
+        {
+            'username': user.username,
+            'multiplier': str(multiplier),
+            'created_at': created_at,
+        }
+        for user, multiplier, created_at in entries
+    ])

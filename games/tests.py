@@ -152,3 +152,56 @@ class PlayerStatsViewTests(TestCase):
         self.client.force_authenticate(user=None)
         response = self.client.get(reverse('games-player-stats'))
         self.assertEqual(response.status_code, 401)
+
+
+class RecentWinsViewTests(TestCase):
+    def setUp(self):
+        self.viewer = get_user_model().objects.create_user(
+            username='recent-wins-viewer',
+            email='recent-wins-viewer@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.winner = get_user_model().objects.create_user(
+            username='recent-wins-winner',
+            email='recent-wins-winner@example.com',
+            password='test-pass-123',
+            user_type='player',
+        )
+        self.test_winner = get_user_model().objects.create_user(
+            username='recent-wins-test-account',
+            email='recent-wins-test-account@example.com',
+            password='test-pass-123',
+            user_type='player',
+            is_test_user=True,
+        )
+        self.plinko_game, _ = Game.objects.get_or_create(slug='plinko', defaults={'name': 'Plinko'})
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.viewer)
+
+    def test_returns_only_wins_ordered_by_recency(self):
+        older = timezone.now() - timedelta(hours=1)
+        _make_plinko_round(self.winner, self.plinko_game, wager_amount=10, multiplier=Decimal('0.50'))  # loss - excluded
+        win1 = _make_plinko_round(self.winner, self.plinko_game, wager_amount=10, multiplier=Decimal('3.00'), created_at=older)
+        win2 = _make_plinko_round(self.winner, self.plinko_game, wager_amount=10, multiplier=Decimal('5.00'))
+
+        response = self.client.get(reverse('games-recent-wins', args=['plinko']))
+        self.assertEqual(response.status_code, 200)
+        usernames = [entry['username'] for entry in response.data]
+        self.assertEqual(usernames, ['recent-wins-winner', 'recent-wins-winner'])
+        self.assertEqual(Decimal(response.data[0]['multiplier']), Decimal('5.00'))
+        self.assertEqual(Decimal(response.data[1]['multiplier']), Decimal('3.00'))
+
+    def test_excludes_test_accounts(self):
+        _make_plinko_round(self.test_winner, self.plinko_game, wager_amount=10, multiplier=Decimal('9.00'))
+        response = self.client.get(reverse('games-recent-wins', args=['plinko']))
+        self.assertEqual(response.data, [])
+
+    def test_unknown_game_returns_404(self):
+        response = self.client.get(reverse('games-recent-wins', args=['not-a-game']))
+        self.assertEqual(response.status_code, 404)
+
+    def test_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+        response = self.client.get(reverse('games-recent-wins', args=['plinko']))
+        self.assertEqual(response.status_code, 401)
