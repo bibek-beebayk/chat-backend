@@ -23,6 +23,15 @@ def grant_gameplay_xp(user, ledger_entry):
     except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
         pass
 
+    # Uncapped, zero-XP per-round counter that "play N rounds" challenges count
+    # against - qualified_gameplay above is capped at 25/day (its job is the XP
+    # trickle) so it can't back a target higher than that. See xp migration 0004.
+    round_key = f'gameplay_round:{ledger_entry.id}'
+    try:
+        award_xp(user, 'gameplay_round', idempotency_key=round_key, note='Gameplay round')
+    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
+        pass
+
     challenge_key = f'daily_challenge_rounds:{user.id}:{timezone.localdate().isoformat()}'
     try:
         award_xp(user, 'daily_challenge_rounds', idempotency_key=challenge_key, note='Daily challenge: play rounds')

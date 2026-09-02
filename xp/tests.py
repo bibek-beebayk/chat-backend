@@ -152,7 +152,8 @@ class DailyProgressViewTests(TestCase):
     """
     Relies on the real seeded XPAction rows (xp/migrations/0002_seed_xp_actions.py):
     daily_login (+10 XP, no target) and daily_challenge_rounds (+30 XP,
-    challenge_target_count=3, challenge_source_action=qualified_gameplay).
+    challenge_target_count=3, challenge_source_action=gameplay_round - the
+    uncapped per-round counter, see xp migration 0004).
     """
 
     def setUp(self):
@@ -183,8 +184,8 @@ class DailyProgressViewTests(TestCase):
         self.assertTrue(by_slug['daily_login']['completed'])
 
     def test_challenge_progress_tracks_source_action_count(self):
-        award_xp(self.user, 'qualified_gameplay', idempotency_key='round-1')
-        award_xp(self.user, 'qualified_gameplay', idempotency_key='round-2')
+        award_xp(self.user, 'gameplay_round', idempotency_key='round-1')
+        award_xp(self.user, 'gameplay_round', idempotency_key='round-2')
         response = self.client.get(reverse('xp-daily-progress'))
         by_slug = {item['slug']: item for item in response.data}
         self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 2)
@@ -192,7 +193,7 @@ class DailyProgressViewTests(TestCase):
 
     def test_challenge_marked_completed_once_awarded(self):
         for i in range(3):
-            award_xp(self.user, 'qualified_gameplay', idempotency_key=f'round-{i}')
+            award_xp(self.user, 'gameplay_round', idempotency_key=f'round-{i}')
         award_xp(self.user, 'daily_challenge_rounds', idempotency_key='today')
         response = self.client.get(reverse('xp-daily-progress'))
         by_slug = {item['slug']: item for item in response.data}
@@ -201,7 +202,7 @@ class DailyProgressViewTests(TestCase):
 
     def test_current_count_never_exceeds_target_display(self):
         for i in range(6):
-            award_xp(self.user, 'qualified_gameplay', idempotency_key=f'round-{i}')
+            award_xp(self.user, 'gameplay_round', idempotency_key=f'round-{i}')
         response = self.client.get(reverse('xp-daily-progress'))
         by_slug = {item['slug']: item for item in response.data}
         self.assertEqual(by_slug['daily_challenge_rounds']['current_count'], 3)  # clamped to target, not 6

@@ -39,6 +39,15 @@ def grant_rocket_xp(round_obj):
     except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
         pass
 
+    # Uncapped, zero-XP per-round counter for "play N rounds" challenges -
+    # qualified_gameplay is capped at 25/day (XP trickle) and can't back a
+    # higher target. Mirrors plinko/xp_hooks.py. See xp migration 0004.
+    round_key = f'gameplay_round:rocket:{round_obj.id}'
+    try:
+        award_xp(user, 'gameplay_round', idempotency_key=round_key, note='Gameplay round (Rollin Rocket)')
+    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
+        pass
+
     challenge_key = f'daily_challenge_rounds:{user.id}:{timezone.localdate().isoformat()}'
     try:
         award_xp(user, 'daily_challenge_rounds', idempotency_key=challenge_key, note='Daily challenge: play rounds (Rollin Rocket)')
