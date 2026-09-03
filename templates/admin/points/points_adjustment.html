@@ -1,9 +1,16 @@
 {% extends "admin/base_site.html" %}
 
+{% block extrahead %}
+    {{ block.super }}
+    {# The player field is Django admin's own autocomplete (select2) widget -
+       without its JS/CSS this renders as an empty, non-functional select. #}
+    {{ form.media }}
+{% endblock %}
+
 {% block content %}
 <div id="content-main">
     <h1>Award / Deduct Points</h1>
-    <p>Manually credit or debit a player's reward points balance. This is recorded as an "Adjustment" entry in the points ledger.</p>
+    <p>Manually credit or debit a player's reward points balance. Start typing a username or email to find them - every player is searchable here. This is recorded as an "Adjustment" entry in the points ledger.</p>
 
     {% if success %}
     <div style="color: #0a7c2f; margin-bottom: 15px; padding: 10px; border: 1px solid #0a7c2f; background: #f2fff5;">

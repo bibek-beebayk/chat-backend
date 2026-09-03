@@ -1,0 +1,36 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="{% static 'admin/js/cancel.js' %}" async></script>
+{% endblock %}
+
+{% block content %}
+<div id="content-main">
+    <h1>Award / Deduct Points</h1>
+    <p>Manually credit or debit reward points for the {{ user_count }} selected player{{ user_count|pluralize }}. The same amount is applied to every one of them, and each is recorded as its own "Adjustment" entry in that player's points ledger.</p>
+
+    <h2>Players ({{ user_count }})</h2>
+    <ul>
+        {% for balance in queryset|slice:":30" %}
+        <li>{{ balance.user.username }} &mdash; current balance {{ balance.balance }}</li>
+        {% endfor %}
+        {% if user_count > 30 %}
+        <li>&hellip; and {{ user_count|add:"-30" }} more.</li>
+        {% endif %}
+    </ul>
+
+    <form method="post" style="max-width: 480px;">
+        {% csrf_token %}
+        {% for obj in queryset %}
+        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ obj.pk }}">
+        {% endfor %}
+        <input type="hidden" name="action" value="bulk_adjust_points">
+        <input type="hidden" name="apply" value="1">
+        {{ form.as_p }}
+        <button type="submit" class="button" style="padding: 6px 18px;">Apply</button>
+        <a href="." class="button cancel-link">Cancel</a>
+    </form>
+</div>
+{% endblock %}

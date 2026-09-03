@@ -466,3 +466,246 @@ class PointsBalanceViewTests(TestCase):
         self.client.force_authenticate(self.user)
         response = self.client.get(reverse('points-redemptions'))
         self.assertEqual(response.status_code, 403)
+
+
+class BulkPointsAdjustmentAdminTests(TestCase):
+    """
+    The bulk points adjustment admin action on PointsBalanceAdmin - a
+    standard two-step Django admin action (mirrors delete_selected exactly:
+    first POST renders a confirmation form, second POST with `apply` set
+    actually applies it), which is what gets multi-select and "select all N
+    matching your search" for free from Django's own changelist machinery.
+    """
+
+    def setUp(self):
+        self.staff = get_user_model().objects.create_superuser(
+            username='bulk-points-admin', email='bulk-points-admin@example.com', password='test-pass-123',
+        )
+        self.client.force_login(self.staff)
+
+        self.u1 = get_user_model().objects.create_user(
+            username='bulk-u1', email='bulk-u1@example.com', password='x', user_type='player',
+        )
+        self.u2 = get_user_model().objects.create_user(
+            username='bulk-u2', email='bulk-u2@example.com', password='x', user_type='player',
+        )
+        self.b1 = PointsBalance.objects.create(user=self.u1, balance=Decimal('100'))
+        self.b2 = PointsBalance.objects.create(user=self.u2, balance=Decimal('50'))
+
+    def test_first_post_renders_a_confirmation_page_without_applying_anything(self):
+        from django.contrib.admin import helpers
+        response = self.client.post('/admin/points/pointsbalance/', data={
+            'action': 'bulk_adjust_points',
+            helpers.ACTION_CHECKBOX_NAME: [self.b1.pk, self.b2.pk],
+            'index': '0',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'bulk-u1')
+        self.assertContains(response, 'bulk-u2')
+        self.assertEqual(PointsLedgerEntry.objects.filter(entry_type=PointsLedgerEntry.ENTRY_ADJUSTMENT).count(), 0)
+
+    def test_second_post_applies_the_same_amount_to_every_selected_user(self):
+        from django.contrib.admin import helpers
+        response = self.client.post('/admin/points/pointsbalance/', data={
+            'action': 'bulk_adjust_points',
+            helpers.ACTION_CHECKBOX_NAME: [self.b1.pk, self.b2.pk],
+            'apply': '1',
+            'points_delta': '1000',
+            'note': 'bulk grant test',
+        })
+        self.assertEqual(response.status_code, 302)  # redirects back to the changelist
+        self.b1.refresh_from_db()
+        self.b2.refresh_from_db()
+        self.assertEqual(self.b1.balance, Decimal('1100'))
+        self.assertEqual(self.b2.balance, Decimal('1050'))
+        self.assertEqual(PointsLedgerEntry.objects.filter(entry_type=PointsLedgerEntry.ENTRY_ADJUSTMENT).count(), 2)
+
+    def test_select_across_resolves_to_every_user_matching_the_current_search(self):
+        # A user that would NOT match a search for 'bulk-u' - proves "select
+        # all N matching your search" scopes to the search, not the world.
+        other_user = get_user_model().objects.create_user(
+            username='unrelated-player', email='unrelated@example.com', password='x', user_type='player',
+        )
+        PointsBalance.objects.create(user=other_user, balance=Decimal('10'))
+
+        from django.contrib.admin import helpers
+        # Mirrors what the admin's own "Select all N matching your search"
+        # link actually submits: the current page's checkboxes stay
+        # checked AND select_across is set - select_across alone with no
+        # checkboxes is not a request Django's changelist view recognizes
+        # as "items selected" (see ModelAdmin.changelist_view's own
+        # pre-check), so it must be additive, not a replacement.
+        response = self.client.post('/admin/points/pointsbalance/?q=bulk-u', data={
+            'action': 'bulk_adjust_points',
+            'select_across': '1',
+            helpers.ACTION_CHECKBOX_NAME: [self.b1.pk, self.b2.pk],
+            'index': '0',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'bulk-u1')
+        self.assertContains(response, 'bulk-u2')
+        self.assertNotContains(response, 'unrelated-player')
+
+    def test_a_negative_adjustment_skips_users_it_would_take_below_zero_without_blocking_others(self):
+        self.b2.balance = Decimal('5')
+        self.b2.save(update_fields=['balance'])
+
+        from django.contrib.admin import helpers
+        response = self.client.post('/admin/points/pointsbalance/', data={
+            'action': 'bulk_adjust_points',
+            helpers.ACTION_CHECKBOX_NAME: [self.b1.pk, self.b2.pk],
+            'apply': '1',
+            'points_delta': '-50',
+            'note': '',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.b1.refresh_from_db()
+        self.b2.refresh_from_db()
+        self.assertEqual(self.b1.balance, Decimal('50'))  # succeeded
+        self.assertEqual(self.b2.balance, Decimal('5'))  # skipped - would go negative, left untouched
+
+    def test_zero_delta_is_rejected_by_the_form_rather_than_silently_no_opping(self):
+        from django.contrib.admin import helpers
+        response = self.client.post('/admin/points/pointsbalance/', data={
+            'action': 'bulk_adjust_points',
+            helpers.ACTION_CHECKBOX_NAME: [self.b1.pk],
+            'apply': '1',
+            'points_delta': '0',
+            'note': '',
+        })
+        self.assertEqual(response.status_code, 200)  # re-renders the form with a validation error
+        self.assertContains(response, 'non-zero')
+        self.b1.refresh_from_db()
+        self.assertEqual(self.b1.balance, Decimal('100'))
+
+    def test_the_single_user_quick_adjust_page_still_works(self):
+        # The player field is now a searchable autocomplete (posts the
+        # user's pk), not a typed exact username - see PointsAdjustmentForm.
+        response = self.client.post('/admin/points/pointsadjustment/', data={
+            'user': str(self.u1.pk),
+            'points_delta': '25',
+            'note': 'still works',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.b1.refresh_from_db()
+        self.assertEqual(self.b1.balance, Decimal('125'))
+
+
+class PointsBalanceAdminVisibilityTests(TestCase):
+    """
+    PointsBalanceAdmin.get_queryset's self-healing backfill - a player with
+    no PointsBalance row (never had a single points event yet) must still
+    show up in this admin list, not just players who happen to already
+    have one.
+    """
+
+    def setUp(self):
+        self.staff = get_user_model().objects.create_superuser(
+            username='visibility-admin', email='visibility-admin@example.com', password='test-pass-123',
+        )
+        self.client.force_login(self.staff)
+
+    def test_a_player_with_no_balance_row_yet_appears_after_visiting_the_list(self):
+        player = get_user_model().objects.create_user(
+            username='never-earned-anything', email='never-earned@example.com', password='x', user_type='player',
+        )
+        self.assertFalse(PointsBalance.objects.filter(user=player).exists())
+
+        response = self.client.get('/admin/points/pointsbalance/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'never-earned-anything')
+        balance = PointsBalance.objects.get(user=player)
+        self.assertEqual(balance.balance, Decimal('0.00'))
+
+    def test_backfilled_players_are_immediately_selectable_for_bulk_adjustment(self):
+        player = get_user_model().objects.create_user(
+            username='backfill-then-adjust', email='backfill-then-adjust@example.com', password='x', user_type='player',
+        )
+        # First visit is what creates the row (see get_queryset).
+        self.client.get('/admin/points/pointsbalance/')
+        balance = PointsBalance.objects.get(user=player)
+
+        from django.contrib.admin import helpers
+        response = self.client.post('/admin/points/pointsbalance/', data={
+            'action': 'bulk_adjust_points',
+            helpers.ACTION_CHECKBOX_NAME: [balance.pk],
+            'apply': '1',
+            'points_delta': '1000',
+            'note': '',
+        })
+        self.assertEqual(response.status_code, 302)
+        balance.refresh_from_db()
+        self.assertEqual(balance.balance, Decimal('1000.00'))
+
+    def test_staff_accounts_are_not_backfilled(self):
+        # PointsBalance is a player-facing concept - a staff account with
+        # no row shouldn't spontaneously get one just from viewing this list.
+        staff_only = get_user_model().objects.create_user(
+            username='staff-no-points', email='staff-no-points@example.com', password='x', user_type='staff',
+        )
+        self.client.get('/admin/points/pointsbalance/')
+        self.assertFalse(PointsBalance.objects.filter(user=staff_only).exists())
+
+    def test_existing_balances_are_left_untouched(self):
+        player = get_user_model().objects.create_user(
+            username='already-has-balance', email='already-has-balance@example.com', password='x', user_type='player',
+        )
+        PointsBalance.objects.create(user=player, balance=Decimal('42.00'), lifetime_earned=42)
+
+        self.client.get('/admin/points/pointsbalance/')
+
+        balance = PointsBalance.objects.get(user=player)
+        self.assertEqual(balance.balance, Decimal('42.00'))
+        self.assertEqual(PointsBalance.objects.filter(user=player).count(), 1)
+
+
+class PointsAdjustmentSinglePlayerFormTests(TestCase):
+    """
+    The single-player quick-adjust page's player field - a searchable
+    autocomplete instead of a typed exact username. The AJAX search endpoint
+    itself is Django admin's standard autocomplete view (backed by
+    UserAdmin.search_fields), exercised separately by Django's own test
+    suite - what's specific to this form is that only a player can actually
+    be submitted, even though the search isn't scoped to players alone.
+    """
+
+    def setUp(self):
+        self.staff = get_user_model().objects.create_superuser(
+            username='single-adjust-admin', email='single-adjust-admin@example.com', password='test-pass-123',
+        )
+        self.client.force_login(self.staff)
+        self.player = get_user_model().objects.create_user(
+            username='single-adjust-player', email='single-adjust-player@example.com', password='x', user_type='player',
+        )
+        self.other_staff = get_user_model().objects.create_user(
+            username='single-adjust-other-staff', email='single-adjust-other-staff@example.com', password='x', user_type='staff',
+        )
+
+    def test_selecting_a_real_player_by_pk_applies_the_adjustment(self):
+        response = self.client.post('/admin/points/pointsadjustment/', data={
+            'user': str(self.player.pk),
+            'points_delta': '500',
+            'note': 'autocomplete test',
+        })
+        self.assertEqual(response.status_code, 200)
+        balance = PointsBalance.objects.get(user=self.player)
+        self.assertEqual(balance.balance, Decimal('500'))
+
+    def test_selecting_a_staff_account_is_rejected(self):
+        response = self.client.post('/admin/points/pointsadjustment/', data={
+            'user': str(self.other_staff.pk),
+            'points_delta': '500',
+            'note': '',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(PointsBalance.objects.filter(user=self.other_staff).exists())
+
+    def test_the_autocomplete_endpoint_finds_the_player_by_partial_username(self):
+        response = self.client.get(
+            '/admin/autocomplete/',
+            {'app_label': 'points', 'model_name': 'pointsbalance', 'field_name': 'user', 'term': 'single-adjust-play'},
+        )
+        self.assertEqual(response.status_code, 200)
+        results = response.json()['results']
+        self.assertTrue(any(r['id'] == str(self.player.pk) for r in results))
