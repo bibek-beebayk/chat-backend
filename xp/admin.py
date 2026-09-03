@@ -71,7 +71,10 @@ class XPActionAdmin(admin.ModelAdmin):
             'description': 'Blank means unlimited awards per day. Unrelated to the challenge period below - this caps how often the action itself can be awarded, e.g. a streak achievement capped at 3/day.',
         }),
         ('Challenge', {
-            'fields': ('challenge_target_count', 'challenge_source_actions', 'challenge_period', 'event_starts_at', 'event_ends_at'),
+            'fields': (
+                'challenge_target_count', 'challenge_source_actions', 'challenge_period',
+                'event_starts_at', 'event_ends_at', 'rotation_pool',
+            ),
             'description': (
                 'Set a target and tick one or more source actions to make '
                 'this a challenge: it is only awarded once the player has '
@@ -84,22 +87,25 @@ class XPActionAdmin(admin.ModelAdmin):
                 'count Plinko and Rocket together, or tick the single '
                 'shared <code>gameplay_round</code> action to count every '
                 'game (that\'s what the default "Play N Rounds" challenge '
-                'does). Per-game round counters currently exist for '
+                'does). Per-game round counters exist for '
                 '<code>plinko_gameplay_round</code>, '
-                '<code>rocket_gameplay_round</code>, and '
-                '<code>hilo_gameplay_round</code> - Slots does not fire one '
-                'yet, so it cannot be included in a challenge until that\'s '
-                'added. Other per-game signals like '
-                '<code>hilo_streak_5</code> or '
+                '<code>rocket_gameplay_round</code>, '
+                '<code>hilo_gameplay_round</code>, and '
+                '<code>slots_gameplay_round</code>. Other per-game signals '
+                'like <code>hilo_streak_5</code> or '
                 '<code>rocket_cashout_above_5x</code> also work as sources '
                 'for a more specific challenge. <strong>Daily</strong> '
                 'resets at local midnight, <strong>Weekly</strong> resets '
                 'Monday, and <strong>Event</strong> runs exactly once '
                 'between the two dates below - invisible and unearnable '
-                'outside that window, and never repeats. No further setup '
-                'needed after saving - the next qualifying round from any '
-                'ticked game picks it up automatically (see '
-                'xp.services.award_matching_challenges).'
+                'outside that window, and never repeats. <strong>Rotation '
+                'pool</strong> (Daily only) makes this challenge show on '
+                'only some days instead of every day - build a larger pool '
+                'of these than the daily count in Daily Rotation Settings '
+                '(under Challenges in the sidebar) and a different subset '
+                'goes live each day. No further setup needed after saving '
+                '- the next qualifying round from any ticked game picks it '
+                'up automatically (see xp.services.award_matching_challenges).'
             ),
         }),
         ('Display', {

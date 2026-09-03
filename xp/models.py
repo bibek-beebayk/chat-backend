@@ -1,3 +1,4 @@
+import hashlib
 from datetime import timedelta
 
 from django.conf import settings
@@ -11,6 +12,27 @@ from .ranks import invalidate_tier_cache
 def tier_badge_upload_to(instance, filename):
     ext = (filename.rsplit('.', 1)[-1] if '.' in filename else 'png').lower()
     return f'tier_badges/{instance.slug}.{ext}'
+
+
+def todays_rotation_pool_ids(pool, *, count, date_key):
+    """
+    Pure, deterministic daily-rotation selection: which `count` ids out of
+    `pool` (an iterable of (id, slug) pairs) are "live" for `date_key` (an
+    ISO date string, e.g. '2026-09-04'). Ranks the whole pool by a stable
+    hash of (date_key, slug) and takes the first `count` - not
+    random.seed(), so the result is reproducible across every server
+    process and every Python version without needing a scheduled task or a
+    stored "today's picks" row: every request that day, everywhere,
+    recomputes the identical answer from nothing but the pool + the date +
+    the count. The set changes automatically at local midnight (a new
+    date_key) and whenever the pool's membership changes.
+
+    count >= len(pool) simply returns the whole pool (no rotation effect,
+    matches "0 disables rotation entirely" at the other extreme). Returns
+    a set of ids - membership-tested, order doesn't matter to callers.
+    """
+    ranked = sorted(pool, key=lambda row: hashlib.sha256(f'{date_key}:{row[1]}'.encode()).hexdigest())
+    return {row[0] for row in ranked[:count]}
 
 
 class Tier(models.Model):
@@ -126,6 +148,24 @@ class XPAction(models.Model):
         blank=True, null=True,
         help_text='Event period only - the challenge is invisible and cannot be earned after this.',
     )
+    # Opt-in daily rotation: a Daily-period challenge with this set is only
+    # actually live on some days, not every day - which days is decided by
+    # todays_rotation_pool_ids() below, not stored anywhere, so it needs no
+    # scheduled task and is identical across every server process. Only
+    # meaningful for challenge_period == PERIOD_DAILY - see clean(). The
+    # player-facing "how many are live today" knob is
+    # challenges.models.DailyRotationConfig, a singleton staff edits in the
+    # "Challenges" admin section.
+    rotation_pool = models.BooleanField(
+        default=False,
+        help_text=(
+            'Daily challenges only. When on, this challenge is only live '
+            'on some days (a random subset of the whole rotation pool, '
+            'sized by Daily Rotation Settings) rather than every day - '
+            'build a larger pool of these than the daily count and a '
+            'different subset shows each day.'
+        ),
+    )
 
     # --- Presentation ---
     # Everything below exists so a new challenge or achievement is a row in
@@ -184,6 +224,9 @@ class XPAction(models.Model):
         elif self.event_starts_at or self.event_ends_at:
             raise ValidationError('Start/end dates only apply to the Event period - clear them or set the period to Event.')
 
+        if self.rotation_pool and self.challenge_period != self.PERIOD_DAILY:
+            raise ValidationError('Rotation pool only applies to Daily challenges.')
+
     @property
     def display_label(self):
         """
@@ -234,14 +277,57 @@ class XPAction(models.Model):
         return start.date().isoformat() if start else 'unscheduled'
 
     def is_challenge_open(self, *, now=None):
-        """Whether the challenge's window is open right now at all - independent of whether the target has been met."""
+        """
+        Whether the challenge's window is open right now at all -
+        independent of whether the target has been met. Also the single
+        place daily rotation is enforced (see is_in_todays_rotation): both
+        xp.services.award_xp()'s eligibility check and
+        xp.views.daily_progress_view's display call this one method, so a
+        challenge left out of today's rotation can neither be earned nor
+        shown - never just hidden while still secretly progressing.
+        """
         now = now or timezone.now()
         start, end = self.challenge_window(now=now)
         if start is not None and now < start:
             return False
         if end is not None and now > end:
             return False
+        if self.rotation_pool and not self.is_in_todays_rotation(now=now):
+            return False
         return True
+
+    def is_in_todays_rotation(self, *, now=None):
+        """
+        Only meaningful when rotation_pool=True (non-pool challenges have
+        nothing to check and always return True). Queries the sibling pool
+        - every other active rotation_pool challenge - and defers the
+        actual selection to the pure, unit-testable
+        todays_rotation_pool_ids() below.
+
+        Lazy-imports challenges.models to avoid a circular import at
+        module load time: challenges/models.py imports XPAction from here
+        at its own module level (for the Daily/Weekly/Special proxy
+        models), so the reverse import can only safely happen inside a
+        function body, once both modules have already finished loading -
+        mirrors the lazy cross-app imports already used elsewhere in this
+        codebase (e.g. points.services._grant_round_xp).
+        """
+        if not self.rotation_pool:
+            return True
+
+        from challenges.models import DailyRotationConfig
+
+        now = now or timezone.now()
+        date_key = timezone.localtime(now).date().isoformat()
+        count = DailyRotationConfig.get_solo().active_count
+        # XPAction (not type(self)/self.__class__) deliberately - a proxy
+        # subclass's own manager (e.g. DailyChallenge's) is scoped to a
+        # single period and to challenges only, which would silently
+        # exclude part of the pool if this were ever called on a proxy
+        # instance instead of a plain XPAction one.
+        pool = XPAction.objects.filter(rotation_pool=True, is_active=True).values_list('id', 'slug')
+        selected_ids = todays_rotation_pool_ids(pool, count=count, date_key=date_key)
+        return self.id in selected_ids
 
     def challenge_resets_at(self, *, now=None):
         """

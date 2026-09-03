@@ -20,6 +20,7 @@ class XPActionSerializer(serializers.ModelSerializer):
             'challenge_period',
             'event_starts_at',
             'event_ends_at',
+            'rotation_pool',
             'is_daily_checklist',
             'is_achievement',
             'display_order',
