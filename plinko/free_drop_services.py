@@ -12,7 +12,6 @@ from .free_drop_constants import (
 )
 from .models import PlinkoRound
 from .services import GameUnavailable
-from .xp_hooks import grant_gameplay_xp
 
 _rng = secrets.SystemRandom()
 
@@ -72,7 +71,8 @@ def play_free_drop_round(user, *, rows, risk_level, wager_amount, drop_position=
         note=f'Plinko Free Drop round: {rows} rows, {risk_level} risk, drop {position:+.2f}, landed slot {slot_index} (x{multiplier})',
     )
 
-    grant_gameplay_xp(user, ledger_entry)
+    # Gameplay/challenge XP fires automatically from settle_wager() above -
+    # see points.services._grant_round_xp. Nothing Plinko-specific needed here.
 
     return PlinkoRound.objects.create(
         user=user,

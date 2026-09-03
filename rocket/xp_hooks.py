@@ -1,4 +1,3 @@
-from django.utils import timezone
 from xp.models import XPAction
 from xp.services import ChallengeNotYetEligible, DailyCapExceeded, award_xp
 from .constants import CASHOUT_ACHIEVEMENT_THRESHOLDS, FIVE_ALIVE_STREAK_LENGTH
@@ -8,51 +7,24 @@ from .models import RocketRound
 def grant_rocket_xp(round_obj):
     """
     Called once, right after a RocketRound resolves (crash or cash-out) -
-    see rocket/services.py::_settle_crash/_settle_cashout. Reuses the
-    existing centralized XP/challenge system (xp.services.award_xp) rather
-    than hardcoding any reward logic here - every award below is just a
-    slug + idempotency key; staff can retune XP values or wire up new
-    challenges against these same slugs via the admin without touching
-    this file. Every award is best-effort: DailyCapExceeded/
-    ChallengeNotYetEligible/XPAction.DoesNotExist are routine, expected
-    conditions that must never propagate and roll back the wallet
-    settlement this is called after - mirrors plinko/xp_hooks.py exactly.
+    see rocket/services.py::_settle_crash/_settle_cashout.
+
+    Gameplay/challenge XP for just having played a round (qualified_gameplay,
+    rocket_qualified_gameplay, gameplay_round, rocket_gameplay_round, and
+    any challenges sourced on them) fires automatically at bet-placement
+    time from points.services._grant_round_xp, not from here - see
+    rocket/services.py::place_bet's call to debit_balance(). What's left
+    here is purely resolution-specific: it can only be known once the
+    round has actually ended.
+
+    Every award below is still just a slug + idempotency key - staff can
+    retune XP values or wire up new challenges against them via admin
+    without touching this file. Every award is best-effort:
+    DailyCapExceeded/ChallengeNotYetEligible/XPAction.DoesNotExist are
+    routine, expected conditions that must never propagate and roll back
+    the wallet settlement this is called after.
     """
     user = round_obj.user
-
-    # Same "qualified gameplay" action Plinko already uses - Rocket rounds
-    # transparently count toward any existing "play N rounds" challenge
-    # keyed off it (e.g. daily_challenge_rounds), no duplication needed.
-    idempotency_key = f'qualified_gameplay:rocket:{round_obj.id}'
-    try:
-        award_xp(user, 'qualified_gameplay', idempotency_key=idempotency_key, note='Qualified gameplay (Rollin Rocket)')
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    # Rocket-specific counterpart, inactive by default (see the seed
-    # migration) - lets staff configure a "play Rocket X times" challenge
-    # later (an XPAction with challenge_source_action=rocket_qualified_
-    # gameplay) purely via admin config, with zero code changes here.
-    rocket_key = f'rocket_qualified_gameplay:{round_obj.id}'
-    try:
-        award_xp(user, 'rocket_qualified_gameplay', idempotency_key=rocket_key, note='Qualified gameplay (Rollin Rocket)')
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    # Uncapped, zero-XP per-round counter for "play N rounds" challenges -
-    # qualified_gameplay is capped at 25/day (XP trickle) and can't back a
-    # higher target. Mirrors plinko/xp_hooks.py. See xp migration 0004.
-    round_key = f'gameplay_round:rocket:{round_obj.id}'
-    try:
-        award_xp(user, 'gameplay_round', idempotency_key=round_key, note='Gameplay round (Rollin Rocket)')
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    challenge_key = f'daily_challenge_rounds:{user.id}:{timezone.localdate().isoformat()}'
-    try:
-        award_xp(user, 'daily_challenge_rounds', idempotency_key=challenge_key, note='Daily challenge: play rounds (Rollin Rocket)')
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
 
     if round_obj.status != RocketRound.STATUS_CASHED_OUT:
         return

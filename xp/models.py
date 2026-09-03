@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from .ranks import invalidate_tier_cache
 
@@ -68,20 +71,100 @@ class XPAction(models.Model):
     is_active = models.BooleanField(default=True)
     description = models.TextField(blank=True)
     max_awards_per_day = models.PositiveIntegerField(blank=True, null=True)
-    # Minimal "daily challenge" support (see xp/services.py) - when both are
-    # set, this action can only be awarded once at least
-    # challenge_target_count EARN entries for challenge_source_action exist
-    # today. Avoids a separate Challenge model for the one challenge type
-    # buildable with this pass's infrastructure ("complete N qualified
-    # gameplay rounds today").
-    challenge_target_count = models.PositiveIntegerField(blank=True, null=True)
-    challenge_source_action = models.ForeignKey(
-        'self',
-        on_delete=models.PROTECT,
+    # Minimal "challenge" support (see xp/services.py) - when a target and at
+    # least one source action are set, this action can only be awarded once
+    # at least challenge_target_count EARN entries across ALL of
+    # challenge_source_actions exist within the current window (see
+    # challenge_window() below). Multiple sources is what lets a challenge
+    # be scoped to specific games: pick a game's own round counter (e.g.
+    # "Plinko Rounds") to count only that game, several to count several
+    # games, or the shared "Gameplay Round" action alone to count every
+    # game - see each game's xp_hooks.py for what it fires every round.
+    challenge_target_count = models.PositiveIntegerField(
+        blank=True,
         null=True,
+        help_text='How many of the source action(s) are needed. Set with Challenge source action(s).',
+    )
+    challenge_source_actions = models.ManyToManyField(
+        'self',
+        symmetrical=False,
         blank=True,
         related_name='challenge_dependents',
+        help_text=(
+            'The action(s) being counted, e.g. pick "Plinko Rounds" alone to '
+            'scope this challenge to just Plinko, several per-game counters '
+            'to cover several games, or "Gameplay Round" alone to count '
+            'every game.'
+        ),
     )
+
+    # How often the target/source count above resets, i.e. which window of
+    # time counts. Only meaningful alongside challenge_target_count/
+    # challenge_source_actions - see challenge_window() for the actual date
+    # math this drives, which xp.services.award_xp() and
+    # xp.views.daily_progress_view both read rather than each assuming a
+    # calendar day the way this used to be hardcoded everywhere.
+    PERIOD_DAILY = 'daily'
+    PERIOD_WEEKLY = 'weekly'
+    PERIOD_EVENT = 'event'
+    CHALLENGE_PERIOD_CHOICES = [
+        (PERIOD_DAILY, 'Daily - resets at midnight'),
+        (PERIOD_WEEKLY, 'Weekly - resets Monday'),
+        (PERIOD_EVENT, 'Event - runs once, between the two dates below'),
+    ]
+    challenge_period = models.CharField(
+        max_length=8,
+        choices=CHALLENGE_PERIOD_CHOICES,
+        default=PERIOD_DAILY,
+        help_text='How often the challenge target resets. "Event" needs the two dates below; the other two ignore them.',
+    )
+    event_starts_at = models.DateTimeField(
+        blank=True, null=True,
+        help_text='Event period only - the challenge is invisible and cannot be earned before this.',
+    )
+    event_ends_at = models.DateTimeField(
+        blank=True, null=True,
+        help_text='Event period only - the challenge is invisible and cannot be earned after this.',
+    )
+
+    # --- Presentation ---
+    # Everything below exists so a new challenge or achievement is a row in
+    # this table and nothing else. Before these fields, the checklist and
+    # achievement lists were hardcoded Python lists in xp/views.py and the
+    # labels, icons and links were hardcoded slug maps in the frontend - so
+    # each new challenge needed a code change and a deploy in two places.
+    is_daily_checklist = models.BooleanField(
+        default=False,
+        help_text=(
+            "Show this on the player's Daily Challenges checklist (the "
+            '/challenges page, the home banner and the rewards page). Leave '
+            'off for background actions players never see as a task, like '
+            'qualified_gameplay.'
+        ),
+    )
+    is_achievement = models.BooleanField(
+        default=False,
+        help_text='Show this as an achievement badge on player profiles.',
+    )
+    display_order = models.PositiveSmallIntegerField(
+        default=100,
+        help_text='Lower numbers appear first in both lists. Ties fall back to slug order.',
+    )
+    action_url = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text=(
+            'Where the tile links to, e.g. "/games/hilo". Leave blank for '
+            'something the player cannot act on directly (like Daily Login) '
+            'and the tile renders without a link.'
+        ),
+    )
+    icon = models.CharField(
+        max_length=8,
+        blank=True,
+        help_text='Optional emoji shown on the tile, e.g. 🃏. Falls back to a suit glyph.',
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -90,6 +173,90 @@ class XPAction(models.Model):
 
     def __str__(self):
         return f'{self.slug} (+{self.xp_value} XP)'
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        if self.challenge_period == self.PERIOD_EVENT:
+            if not self.event_starts_at or not self.event_ends_at:
+                raise ValidationError('Event challenges need both a start and an end date.')
+            if self.event_ends_at <= self.event_starts_at:
+                raise ValidationError('An event must end after it starts.')
+        elif self.event_starts_at or self.event_ends_at:
+            raise ValidationError('Start/end dates only apply to the Event period - clear them or set the period to Event.')
+
+    @property
+    def display_label(self):
+        """
+        The label as players see it. `{target}` in the label is replaced with
+        challenge_target_count, so "Play {target} Rounds" stays correct when
+        the target is retuned in admin - previously the round count was
+        interpolated in the frontend, which meant the admin-editable label
+        was partly ignored.
+        """
+        if '{target}' not in self.label:
+            return self.label
+        return self.label.replace('{target}', str(self.challenge_target_count or 1))
+
+    def challenge_window(self, *, now=None):
+        """
+        (start, end) the challenge's progress is counted within right now.
+        `end` is None for daily/weekly - the count is simply "since start,
+        with no upper bound yet" - and the explicit event_ends_at for an
+        event. `start` can be None only for a misconfigured event (no
+        event_starts_at set); callers treat that as never eligible via
+        is_challenge_open() below, same as a not-yet-started event.
+
+        This is the one place "which window of time counts" is computed -
+        xp.services.award_xp()'s eligibility check and
+        xp.views.daily_progress_view's progress display both call this
+        rather than each hardcoding a date boundary, so they can never
+        disagree with each other.
+        """
+        now = now or timezone.now()
+        if self.challenge_period == self.PERIOD_EVENT:
+            return self.event_starts_at, self.event_ends_at
+
+        local_midnight = timezone.localtime(now).replace(hour=0, minute=0, second=0, microsecond=0)
+        if self.challenge_period == self.PERIOD_WEEKLY:
+            local_midnight -= timedelta(days=local_midnight.weekday())  # back to Monday
+        return local_midnight, None
+
+    def challenge_period_key(self, *, now=None):
+        """
+        Identifies *which instance* of a recurring window we're in, so the
+        award idempotency key changes when the window rolls over - a
+        weekly challenge earned last week is earnable again this week.
+        An event has exactly one instance ever, so its own id suffices.
+        """
+        if self.challenge_period == self.PERIOD_EVENT:
+            return f'event-{self.pk}'
+        start, _ = self.challenge_window(now=now)
+        return start.date().isoformat() if start else 'unscheduled'
+
+    def is_challenge_open(self, *, now=None):
+        """Whether the challenge's window is open right now at all - independent of whether the target has been met."""
+        now = now or timezone.now()
+        start, end = self.challenge_window(now=now)
+        if start is not None and now < start:
+            return False
+        if end is not None and now > end:
+            return False
+        return True
+
+    def challenge_resets_at(self, *, now=None):
+        """
+        When this window's progress next resets (daily/weekly) or closes
+        for good (event, or None if no end date is set). Display-only - a
+        countdown, not used in any eligibility math - so a frontend can
+        show "resets in 4h" / "ends in 3d" without knowing which period
+        type it's looking at.
+        """
+        if self.challenge_period == self.PERIOD_EVENT:
+            return self.event_ends_at
+        start, _ = self.challenge_window(now=now)
+        if self.challenge_period == self.PERIOD_WEEKLY:
+            return start + timedelta(days=7)
+        return start + timedelta(days=1)
 
 
 class XPBalance(models.Model):

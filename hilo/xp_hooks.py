@@ -1,5 +1,3 @@
-from django.utils import timezone
-
 from xp.models import XPAction
 from xp.services import ChallengeNotYetEligible, DailyCapExceeded, award_xp
 from .constants import CASHOUT_ACHIEVEMENT_THRESHOLDS, STREAK_ACHIEVEMENT_LENGTHS
@@ -9,61 +7,24 @@ from .models import HiLoRound
 def grant_hilo_xp(round_obj):
     """
     Called once, right after a HiLoRound resolves (bust or cash-out) - see
-    hilo/services.py::_settle_bust/_settle_cashout. Reuses the centralized
-    XP/challenge system (xp.services.award_xp) rather than hardcoding any
-    reward logic here - every award below is just a slug + idempotency key,
-    so staff can retune XP values or wire up new challenges against these
-    same slugs via the admin without touching this file.
+    hilo/services.py::_settle_bust/_settle_cashout.
 
-    Every award is best-effort: DailyCapExceeded / ChallengeNotYetEligible /
-    XPAction.DoesNotExist are routine, expected conditions that must never
-    propagate and roll back the wallet settlement this is called after -
-    mirrors rocket/xp_hooks.py and plinko/xp_hooks.py exactly.
+    Gameplay/challenge XP for just having played a round (qualified_gameplay,
+    hilo_qualified_gameplay, gameplay_round, hilo_gameplay_round, and any
+    challenges sourced on them) fires automatically at bet-placement time
+    from points.services._grant_round_xp, not from here - see
+    hilo/services.py::start_round's call to debit_balance(). What's left
+    here is purely resolution-specific: streaks and cashout thresholds can
+    only be known once the round has actually ended.
+
+    Every award below is still just a slug + idempotency key - staff can
+    retune XP values or wire up new challenges against them via admin
+    without touching this file. Every award is best-effort:
+    DailyCapExceeded / ChallengeNotYetEligible / XPAction.DoesNotExist are
+    routine, expected conditions that must never propagate and roll back
+    the wallet settlement this is called after.
     """
     user = round_obj.user
-
-    # Shared cross-game action - Hi-Lo rounds transparently count toward any
-    # existing "play N rounds" challenge keyed off it, no duplication needed.
-    try:
-        award_xp(
-            user, 'qualified_gameplay',
-            idempotency_key=f'qualified_gameplay:hilo:{round_obj.id}',
-            note='Qualified gameplay (Rollin Hi-Lo)',
-        )
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    # Hi-Lo-specific counterpart - lets staff configure a "play Hi-Lo X
-    # times" challenge purely via admin config, with no code change here.
-    try:
-        award_xp(
-            user, 'hilo_qualified_gameplay',
-            idempotency_key=f'hilo_qualified_gameplay:{round_obj.id}',
-            note='Qualified gameplay (Rollin Hi-Lo)',
-        )
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    # Uncapped, zero-XP per-round counter for "play N rounds" challenges -
-    # qualified_gameplay is capped at 25/day (XP trickle) and can't back a
-    # higher target. Mirrors plinko/rocket. See xp migration 0004.
-    try:
-        award_xp(
-            user, 'gameplay_round',
-            idempotency_key=f'gameplay_round:hilo:{round_obj.id}',
-            note='Gameplay round (Rollin Hi-Lo)',
-        )
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
-
-    try:
-        award_xp(
-            user, 'daily_challenge_rounds',
-            idempotency_key=f'daily_challenge_rounds:{user.id}:{timezone.localdate().isoformat()}',
-            note='Daily challenge: play rounds (Rollin Hi-Lo)',
-        )
-    except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
-        pass
 
     # Streak awards are read straight off the round. Where Rocket's "Five
     # Alive" had to walk round history to reconstruct a streak, a Hi-Lo

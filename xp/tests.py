@@ -1,7 +1,10 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from notifications.models import Notification
@@ -9,7 +12,32 @@ from .models import XPAction, XPBalance, XPLedgerEntry
 from points.models import PointsBalance, PointsLedgerEntry
 from .models import Tier
 from .ranks import get_rank_tiers, next_rank_for_xp, rank_for_xp, sub_level_for_xp, sub_ranges_for_tier
-from .services import ChallengeNotYetEligible, DailyCapExceeded, apply_adjustment, award_xp, rank_up_bonus_rp
+from .services import (
+    ChallengeNotYetEligible,
+    DailyCapExceeded,
+    apply_adjustment,
+    award_matching_challenges,
+    award_xp,
+    rank_up_bonus_rp,
+)
+
+
+def _create_challenge(**kwargs):
+    """
+    Test helper: XPAction.objects.create() plus setting the M2M
+    challenge_source_actions, which (unlike a plain FK) can't be passed to
+    create() itself. Pass `challenge_source_action=<action>` or
+    `challenge_source_action=[<action>, ...]` exactly as tests already did
+    before the FK became an M2M - it's translated to a .set() call after
+    creation. A plain XPAction.objects.create() call (no source_action
+    kwarg) behaves identically either way, so this safely replaces every
+    call site in this file.
+    """
+    sources = kwargs.pop('challenge_source_action', None)
+    action = XPAction.objects.create(**kwargs)
+    if sources is not None:
+        action.challenge_source_actions.set(sources if isinstance(sources, (list, tuple)) else [sources])
+    return action
 
 
 class RankThresholdTests(TestCase):
@@ -58,7 +86,7 @@ class XPServiceTests(TestCase):
             password='test-pass-123',
             user_type='staff',
         )
-        self.action = XPAction.objects.create(
+        self.action = _create_challenge(
             slug='test_action',
             label='Test Action',
             xp_value=10,
@@ -97,7 +125,7 @@ class XPServiceTests(TestCase):
 
     def test_award_xp_blocks_challenge_until_target_reached(self):
         source = self.action
-        challenge = XPAction.objects.create(
+        challenge = _create_challenge(
             slug='test_challenge',
             label='Test Challenge',
             xp_value=50,
@@ -118,7 +146,7 @@ class XPServiceTests(TestCase):
         self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 20 + 50)
 
     def test_rank_up_cached_field_updates_and_fires_notification(self):
-        big_action = XPAction.objects.create(slug='big', label='Big', xp_value=1000, is_active=True)
+        big_action = _create_challenge(slug='big', label='Big', xp_value=1000, is_active=True)
         award_xp(self.user, big_action.slug)
 
         balance = XPBalance.objects.get(user=self.user)
@@ -131,7 +159,7 @@ class XPServiceTests(TestCase):
         self.assertFalse(Notification.objects.filter(user=self.user).exists())
 
     def test_only_one_notification_when_skipping_multiple_tiers(self):
-        huge_action = XPAction.objects.create(slug='huge', label='Huge', xp_value=20000, is_active=True)
+        huge_action = _create_challenge(slug='huge', label='Huge', xp_value=20000, is_active=True)
         award_xp(self.user, huge_action.slug)
         self.assertEqual(Notification.objects.filter(user=self.user).count(), 1)
 
@@ -158,6 +186,237 @@ class XPServiceTests(TestCase):
     def test_apply_adjustment_rejects_zero_delta(self):
         with self.assertRaises(ValueError):
             apply_adjustment(self.user, self.staff, 0)
+
+
+class ChallengePeriodTests(TestCase):
+    """
+    Weekly and event challenges - the period math on XPAction
+    (challenge_window/challenge_period_key/is_challenge_open) and the
+    generic multi-challenge discovery in award_matching_challenges().
+    Daily-period behavior is already covered end-to-end by
+    XPServiceTests.test_award_xp_blocks_challenge_until_target_reached and
+    DailyProgressViewTests below (both use the real seeded daily_challenge_
+    rounds action), so this focuses on the two new period types.
+    """
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='challenge-period-player',
+            email='challenge-period-player@example.com',
+            password='test-pass-123',
+        )
+        self.source = _create_challenge(slug='period_source', label='Source', xp_value=0, is_active=True)
+
+    def test_weekly_challenge_only_counts_this_weeks_source_awards(self):
+        challenge = _create_challenge(
+            slug='weekly_test', label='Weekly Test', xp_value=50, is_active=True,
+            challenge_target_count=2, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_WEEKLY,
+        )
+        # An award from last week must not count toward this week's target.
+        last_week = XPLedgerEntry.objects.create(
+            user=self.user, entry_type=XPLedgerEntry.ENTRY_EARN, delta=0, xp_after=0,
+            action=self.source, idempotency_key='old',
+        )
+        XPLedgerEntry.objects.filter(pk=last_week.pk).update(
+            created_at=timezone.now() - timedelta(days=10),
+        )
+        with self.assertRaises(ChallengeNotYetEligible):
+            award_xp(self.user, challenge.slug)
+
+        award_xp(self.user, self.source.slug, idempotency_key='this-week-1')
+        award_xp(self.user, self.source.slug, idempotency_key='this-week-2')
+        award_xp(self.user, challenge.slug)  # now eligible
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 50)
+
+    def test_weekly_challenge_period_key_changes_across_week_boundary(self):
+        challenge = _create_challenge(
+            slug='weekly_key_test', label='Weekly Key Test', xp_value=10, is_active=True,
+            challenge_period=XPAction.PERIOD_WEEKLY,
+        )
+        this_week = timezone.now()
+        next_week = this_week + timedelta(days=8)
+        self.assertNotEqual(
+            challenge.challenge_period_key(now=this_week),
+            challenge.challenge_period_key(now=next_week),
+        )
+
+    def test_event_challenge_not_eligible_before_it_starts(self):
+        challenge = _create_challenge(
+            slug='event_future', label='Future Event', xp_value=50, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() + timedelta(days=1),
+            event_ends_at=timezone.now() + timedelta(days=8),
+        )
+        award_xp(self.user, self.source.slug, idempotency_key='r1')
+        with self.assertRaises(ChallengeNotYetEligible):
+            award_xp(self.user, challenge.slug)
+
+    def test_event_challenge_not_eligible_after_it_ends(self):
+        challenge = _create_challenge(
+            slug='event_past', label='Past Event', xp_value=50, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() - timedelta(days=8),
+            event_ends_at=timezone.now() - timedelta(days=1),
+        )
+        award_xp(self.user, self.source.slug, idempotency_key='r1')
+        with self.assertRaises(ChallengeNotYetEligible):
+            award_xp(self.user, challenge.slug)
+
+    def test_event_challenge_awardable_during_its_window(self):
+        challenge = _create_challenge(
+            slug='event_live', label='Live Event', xp_value=50, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() - timedelta(hours=1),
+            event_ends_at=timezone.now() + timedelta(days=1),
+        )
+        award_xp(self.user, self.source.slug, idempotency_key='r1')
+        award_xp(self.user, challenge.slug)
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 50)
+
+    def test_event_period_key_is_stable_for_the_life_of_the_event(self):
+        # Unlike daily/weekly, an event has exactly one instance ever - its
+        # key must not depend on `now` at all, since it never recurs.
+        challenge = _create_challenge(
+            slug='event_key_test', label='Event Key Test', xp_value=10, is_active=True,
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() - timedelta(hours=1),
+            event_ends_at=timezone.now() + timedelta(days=1),
+        )
+        self.assertEqual(
+            challenge.challenge_period_key(now=timezone.now()),
+            challenge.challenge_period_key(now=timezone.now() + timedelta(hours=5)),
+        )
+
+    def test_model_validation_rejects_event_period_without_dates(self):
+        from django.core.exceptions import ValidationError
+        action = XPAction(slug='bad_event', label='Bad Event', xp_value=10, challenge_period=XPAction.PERIOD_EVENT)
+        with self.assertRaises(ValidationError):
+            action.clean()
+
+    def test_model_validation_rejects_dates_on_non_event_period(self):
+        from django.core.exceptions import ValidationError
+        action = XPAction(
+            slug='bad_daily', label='Bad Daily', xp_value=10, challenge_period=XPAction.PERIOD_DAILY,
+            event_starts_at=timezone.now(),
+        )
+        with self.assertRaises(ValidationError):
+            action.clean()
+
+    def test_award_matching_challenges_attempts_every_challenge_on_the_source(self):
+        """
+        The mechanism that makes "add a new challenge from admin alone"
+        actually true: a game calls this once after firing its counter
+        action, and every currently configured challenge sourced on it -
+        daily, weekly, or event - is attempted, with no code naming any
+        specific challenge slug.
+        """
+        daily = _create_challenge(
+            slug='matching_daily', label='Matching Daily', xp_value=5, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_DAILY,
+        )
+        weekly = _create_challenge(
+            slug='matching_weekly', label='Matching Weekly', xp_value=7, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+            challenge_period=XPAction.PERIOD_WEEKLY,
+        )
+        # A challenge sourced on something else entirely must not be touched.
+        other_source = _create_challenge(slug='other_source', label='Other', xp_value=0, is_active=True)
+        unrelated = _create_challenge(
+            slug='matching_unrelated', label='Unrelated', xp_value=100, is_active=True,
+            challenge_target_count=1, challenge_source_action=other_source,
+        )
+
+        award_xp(self.user, self.source.slug, idempotency_key='r1')
+        award_matching_challenges(self.user, source_action_slug=self.source.slug)
+
+        self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=daily).exists())
+        self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=weekly).exists())
+        self.assertFalse(XPLedgerEntry.objects.filter(user=self.user, action=unrelated).exists())
+
+    def test_award_matching_challenges_is_a_silent_noop_with_no_configured_challenges(self):
+        # Must never raise just because nothing happens to be configured -
+        # every game calls this unconditionally after every round.
+        award_matching_challenges(self.user, source_action_slug=self.source.slug)
+
+    def test_award_matching_challenges_one_ineligible_challenge_does_not_block_another(self):
+        eligible = _create_challenge(
+            slug='matching_eligible', label='Eligible', xp_value=5, is_active=True,
+            challenge_target_count=1, challenge_source_action=self.source,
+        )
+        needs_more = _create_challenge(
+            slug='matching_needs_more', label='Needs More', xp_value=5, is_active=True,
+            challenge_target_count=5, challenge_source_action=self.source,
+        )
+        award_xp(self.user, self.source.slug, idempotency_key='r1')
+        award_matching_challenges(self.user, source_action_slug=self.source.slug)
+
+        self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=eligible).exists())
+        self.assertFalse(XPLedgerEntry.objects.filter(user=self.user, action=needs_more).exists())
+
+    def test_multi_game_challenge_sums_progress_across_all_listed_sources(self):
+        """
+        The actual "add as many games as I like" mechanism: a challenge
+        lists more than one source action, and progress is the combined
+        count across all of them - a round from either game advances it.
+        """
+        game_a = _create_challenge(slug='game_a_rounds', label='Game A Rounds', xp_value=0, is_active=True)
+        game_b = _create_challenge(slug='game_b_rounds', label='Game B Rounds', xp_value=0, is_active=True)
+        challenge = _create_challenge(
+            slug='two_game_challenge', label='Two Game Challenge', xp_value=50, is_active=True,
+            challenge_target_count=3, challenge_source_action=[game_a, game_b],
+        )
+
+        award_xp(self.user, game_a.slug, idempotency_key='a1')
+        award_xp(self.user, game_b.slug, idempotency_key='b1')
+        with self.assertRaises(ChallengeNotYetEligible):
+            award_xp(self.user, challenge.slug)
+
+        award_xp(self.user, game_a.slug, idempotency_key='a2')
+        award_xp(self.user, challenge.slug)  # 3rd combined round makes it eligible
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 50)
+
+    def test_a_challenge_scoped_to_one_game_ignores_rounds_from_another(self):
+        game_a = _create_challenge(slug='scoped_game_a', label='Game A', xp_value=0, is_active=True)
+        game_b = _create_challenge(slug='scoped_game_b', label='Game B', xp_value=0, is_active=True)
+        challenge = _create_challenge(
+            slug='scoped_to_a', label='Scoped To A', xp_value=50, is_active=True,
+            challenge_target_count=1, challenge_source_action=game_a,
+        )
+
+        # A round in game_b must not count toward a challenge scoped to game_a.
+        award_xp(self.user, game_b.slug, idempotency_key='b1')
+        with self.assertRaises(ChallengeNotYetEligible):
+            award_xp(self.user, challenge.slug)
+
+        award_xp(self.user, game_a.slug, idempotency_key='a1')
+        award_xp(self.user, challenge.slug)
+        self.assertEqual(XPBalance.objects.get(user=self.user).total_xp, 50)
+
+    def test_award_matching_challenges_reaches_a_challenge_via_any_of_its_sources(self):
+        """
+        A multi-game challenge must be discovered (and attempted) when
+        EITHER game fires its round - not only when the first-listed
+        source does - since award_matching_challenges is called
+        independently by each game after its own counter fires.
+        """
+        game_a = _create_challenge(slug='discover_game_a', label='Game A', xp_value=0, is_active=True)
+        game_b = _create_challenge(slug='discover_game_b', label='Game B', xp_value=0, is_active=True)
+        challenge = _create_challenge(
+            slug='discoverable_both', label='Discoverable', xp_value=10, is_active=True,
+            challenge_target_count=1, challenge_source_action=[game_a, game_b],
+        )
+
+        award_xp(self.user, game_b.slug, idempotency_key='b1')
+        # Only game_b fired - a call scoped to game_a's slug must still find
+        # and attempt this challenge, since it lists both as sources.
+        award_matching_challenges(self.user, source_action_slug=game_b.slug)
+
+        self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=challenge).exists())
 
 
 class DailyProgressViewTests(TestCase):
@@ -230,6 +489,62 @@ class DailyProgressViewTests(TestCase):
         response = self.client.get(reverse('xp-daily-progress'))
         self.assertEqual(response.status_code, 401)
 
+    def test_daily_challenge_reports_its_period_and_a_reset_time(self):
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertEqual(by_slug['daily_challenge_rounds']['challenge_period'], 'daily')
+        self.assertIsNotNone(by_slug['daily_challenge_rounds']['resets_at'])
+
+    def test_weekly_challenge_appears_with_its_period(self):
+        _create_challenge(
+            slug='weekly_checklist_test', label='Weekly Checklist Test', xp_value=20, is_active=True,
+            is_daily_checklist=True, challenge_period=XPAction.PERIOD_WEEKLY,
+        )
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertIn('weekly_checklist_test', by_slug)
+        self.assertEqual(by_slug['weekly_checklist_test']['challenge_period'], 'weekly')
+
+    def test_event_challenge_is_hidden_before_its_window_opens(self):
+        _create_challenge(
+            slug='event_checklist_future', label='Future Event Checklist', xp_value=20, is_active=True,
+            is_daily_checklist=True, challenge_target_count=1,
+            challenge_source_action=XPAction.objects.get(slug='gameplay_round'),
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() + timedelta(days=1),
+            event_ends_at=timezone.now() + timedelta(days=8),
+        )
+        response = self.client.get(reverse('xp-daily-progress'))
+        slugs = {item['slug'] for item in response.data}
+        self.assertNotIn('event_checklist_future', slugs)
+
+    def test_event_challenge_is_visible_during_its_window(self):
+        _create_challenge(
+            slug='event_checklist_live', label='Live Event Checklist', xp_value=20, is_active=True,
+            is_daily_checklist=True, challenge_target_count=1,
+            challenge_source_action=XPAction.objects.get(slug='gameplay_round'),
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() - timedelta(hours=1),
+            event_ends_at=timezone.now() + timedelta(days=1),
+        )
+        response = self.client.get(reverse('xp-daily-progress'))
+        by_slug = {item['slug']: item for item in response.data}
+        self.assertIn('event_checklist_live', by_slug)
+        self.assertEqual(by_slug['event_checklist_live']['challenge_period'], 'event')
+
+    def test_event_challenge_is_hidden_after_its_window_closes(self):
+        _create_challenge(
+            slug='event_checklist_past', label='Past Event Checklist', xp_value=20, is_active=True,
+            is_daily_checklist=True, challenge_target_count=1,
+            challenge_source_action=XPAction.objects.get(slug='gameplay_round'),
+            challenge_period=XPAction.PERIOD_EVENT,
+            event_starts_at=timezone.now() - timedelta(days=8),
+            event_ends_at=timezone.now() - timedelta(days=1),
+        )
+        response = self.client.get(reverse('xp-daily-progress'))
+        slugs = {item['slug'] for item in response.data}
+        self.assertNotIn('event_checklist_past', slugs)
+
 
 class GlobalRankTests(TestCase):
     def setUp(self):
@@ -277,14 +592,14 @@ class AchievementsViewTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_all_achievements_locked_for_new_user(self):
-        # Length is derived from the registry rather than hardcoded, so
-        # adding a game's achievement to ACHIEVEMENT_DEFINITIONS doesn't
-        # break this test for an unrelated reason.
-        from xp.views import ACHIEVEMENT_DEFINITIONS
+        # Length is derived from the flagged rows rather than hardcoded, so
+        # enabling another achievement in admin doesn't break this test for
+        # an unrelated reason.
+        expected = XPAction.objects.filter(is_achievement=True, is_active=True).count()
 
         response = self.client.get(reverse('xp-achievements'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), len(ACHIEVEMENT_DEFINITIONS))
+        self.assertEqual(len(response.data), expected)
         self.assertTrue(all(item['unlocked'] is False for item in response.data))
 
     def test_streak_7day_action_unlocks_the_matching_achievement(self):
@@ -361,7 +676,7 @@ class RankUpBonusTests(TestCase):
             password='test-pass-123',
             user_type='player',
         )
-        self.action = XPAction.objects.create(slug='rankup-test-action', label='Test', xp_value=10, is_active=True)
+        self.action = _create_challenge(slug='rankup-test-action', label='Test', xp_value=10, is_active=True)
 
     def _ledger_balance(self):
         balance = PointsBalance.objects.filter(user=self.user).first()
@@ -373,7 +688,7 @@ class RankUpBonusTests(TestCase):
         self.assertEqual(XPBalance.objects.get(user=self.user).pending_celebration_rank, '')
 
     def test_rank_up_to_silver_credits_the_matching_bonus(self):
-        big = XPAction.objects.create(slug='rankup-big', label='Big', xp_value=1000, is_active=True)
+        big = _create_challenge(slug='rankup-big', label='Big', xp_value=1000, is_active=True)
         award_xp(self.user, big.slug)
         self.assertEqual(self._ledger_balance(), rank_up_bonus_rp('silver'))
         entry = PointsLedgerEntry.objects.get(user=self.user)
@@ -382,7 +697,7 @@ class RankUpBonusTests(TestCase):
         self.assertEqual(XPBalance.objects.get(user=self.user).pending_celebration_rank, 'silver')
 
     def test_skipping_multiple_tiers_awards_only_the_final_tiers_bonus(self):
-        huge = XPAction.objects.create(slug='rankup-huge', label='Huge', xp_value=20000, is_active=True)
+        huge = _create_challenge(slug='rankup-huge', label='Huge', xp_value=20000, is_active=True)
         award_xp(self.user, huge.slug)  # bronze -> rollin_elite in one jump
         self.assertEqual(self._ledger_balance(), rank_up_bonus_rp('rollin_elite'))
         self.assertEqual(PointsLedgerEntry.objects.filter(user=self.user).count(), 1)
@@ -465,7 +780,7 @@ class AcknowledgeLevelUpViewTests(TestCase):
             password='test-pass-123',
             user_type='player',
         )
-        self.action = XPAction.objects.create(slug='ack-big', label='Big', xp_value=1000, is_active=True)
+        self.action = _create_challenge(slug='ack-big', label='Big', xp_value=1000, is_active=True)
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
 

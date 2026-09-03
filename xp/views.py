@@ -8,24 +8,17 @@ from .models import Tier, XPAction, XPBalance, XPLedgerEntry
 from .ranks import rank_for_xp, sub_ranges_for_tier
 from .serializers import XPActionSerializer, XPStatusSerializer
 
-# Achievements shown on the player profile - each backed by a real, already-
-# earnable signal rather than a fabricated badge. Three are existing XPAction
-# slugs (already seeded and functional, just never surfaced in any UI before
-# now); "first_win" isn't an XP action at all, it's a direct cross-game query
-# (see _has_first_win below).
-ACHIEVEMENT_DEFINITIONS = [
-    {'slug': 'streak_7day', 'label': '7-Day Streak'},
-    {'slug': 'first_win', 'label': 'First Win'},
-    {'slug': 'rocket_cashout_above_10x', 'label': 'Moon Walker'},
-    {'slug': 'rocket_five_alive', 'label': 'Five Alive'},
-    {'slug': 'hilo_streak_10', 'label': 'Card Counter'},
-]
-
-# The two real player-facing "daily checklist" actions - NOT qualified_gameplay,
-# which is background per-round trickle with no natural target the player
-# checks off. Keeping this list here (not a model flag) since "which actions
-# are checklist-worthy" is a display concern, not an award-eligibility one.
-DAILY_CHECKLIST_SLUGS = ['daily_login', 'daily_challenge_rounds']
+# Which actions are player-facing challenges/achievements, in what order,
+# with what label, icon and link, is all data on XPAction now
+# (is_daily_checklist / is_achievement / display_order / icon / action_url)
+# rather than lists here. That means adding a challenge is creating a row in
+# Django admin - no code change, no deploy, and no matching change in the
+# frontend, which reads every one of those fields off the API response.
+#
+# "first_win" is the one achievement not awarded as XP: it has an XPAction
+# row so the list stays a single ordered query, but whether it is unlocked
+# comes from a live cross-game query (see _has_first_win below).
+FIRST_WIN_SLUG = 'first_win'
 
 
 def _is_staff_user(user):
@@ -54,46 +47,81 @@ def acknowledge_level_up_view(request):
 @permission_classes([permissions.IsAuthenticated])
 def daily_progress_view(request):
     """
-    Today's progress toward the player-facing daily checklist actions, using
-    the EXACT same "today" boundary (timezone.localdate() on created_at__date)
-    that xp.services.award_xp()'s own daily-cap/challenge eligibility checks
-    use - so this can never disagree with the real award state.
+    Current progress toward every player-facing checklist action - despite
+    the name/URL (kept for backward compatibility), this is not daily-only:
+    an action's own challenge_period (daily/weekly/event, see XPAction)
+    decides which window its progress is measured against, via
+    XPAction.challenge_window() - the EXACT same method
+    xp.services.award_xp()'s own eligibility check calls, so this can never
+    disagree with the real award state. An event action is only listed
+    while its window is actually open (is_challenge_open()) - before it
+    starts there's nothing to show yet, and once it ends it drops off the
+    checklist rather than lingering as a stale tile (see is_achievement on
+    XPAction for challenges that should be remembered permanently instead).
     """
-    today = timezone.localdate()
-    actions = {a.slug: a for a in XPAction.objects.filter(slug__in=DAILY_CHECKLIST_SLUGS, is_active=True)}
+    now = timezone.now()
+    actions = (
+        XPAction.objects
+        .filter(is_daily_checklist=True, is_active=True)
+        .order_by('display_order', 'slug')
+    )
 
     results = []
-    for slug in DAILY_CHECKLIST_SLUGS:
-        action = actions.get(slug)
-        if not action:
+    for action in actions:
+        is_challenge = action.challenge_target_count is not None
+        if is_challenge and not action.is_challenge_open(now=now):
             continue
 
-        # For a plain daily action (daily_login), progress is against its own
-        # award count today. For a challenge action (daily_challenge_rounds),
-        # progress is against its challenge_source_action's award count today
-        # - the same count xp.services.award_xp() checks for eligibility.
+        window_start, window_end = action.challenge_window(now=now)
+
+        # For a plain action with no target (daily_login), progress is
+        # against its own award count in its window. For a challenge
+        # action, progress is against the combined award count of every
+        # action in challenge_source_actions in that same window - the
+        # same count xp.services.award_xp() checks for eligibility. This is
+        # what a multi-game challenge sums across: e.g. Plinko + Rocket
+        # rounds both count if both of their counters are listed.
         target = action.challenge_target_count or 1
-        count_action_id = action.challenge_source_action_id or action.id
-        current_count = XPLedgerEntry.objects.filter(
+        source_ids = list(action.challenge_source_actions.values_list('id', flat=True)) or [action.id]
+        count_qs = XPLedgerEntry.objects.filter(
             user=request.user,
-            action_id=count_action_id,
+            action_id__in=source_ids,
             entry_type=XPLedgerEntry.ENTRY_EARN,
-            created_at__date=today,
-        ).count()
-        completed = XPLedgerEntry.objects.filter(
+            created_at__gte=window_start,
+        )
+        completed_qs = XPLedgerEntry.objects.filter(
             user=request.user,
             action=action,
             entry_type=XPLedgerEntry.ENTRY_EARN,
-            created_at__date=today,
-        ).exists()
+            created_at__gte=window_start,
+        )
+        if window_end is not None:
+            count_qs = count_qs.filter(created_at__lte=window_end)
+            completed_qs = completed_qs.filter(created_at__lte=window_end)
+        current_count = count_qs.count()
+        completed = completed_qs.exists()
 
         results.append({
             'slug': action.slug,
-            'label': action.label,
+            # display_label resolves any {target} placeholder, so the count
+            # in the label always matches challenge_target_count.
+            'label': action.display_label,
+            'description': action.description,
+            'icon': action.icon,
+            # Blank means "not directly actionable" - the client renders the
+            # tile without a link rather than guessing a destination.
+            'action_url': action.action_url,
             'xp_value': action.xp_value,
             'target_count': target,
             'current_count': min(current_count, target),
             'completed': completed,
+            'challenge_period': action.challenge_period,
+            # When this window's progress next resets (daily/weekly) or
+            # closes for good (event) - display-only, lets the frontend
+            # show a correct countdown/label for any period without
+            # hardcoding per-slug knowledge of which challenges are weekly
+            # or time-limited.
+            'resets_at': action.challenge_resets_at(now=now),
         })
 
     return Response(results)
@@ -123,28 +151,37 @@ def _has_first_win(user):
 @permission_classes([permissions.IsAuthenticated])
 def achievements_view(request):
     user = request.user
+    actions = list(
+        XPAction.objects
+        .filter(is_achievement=True, is_active=True)
+        .order_by('display_order', 'slug')
+    )
+
     earned_slugs = {
         entry.action.slug: entry.created_at
         for entry in XPLedgerEntry.objects.filter(
             user=user,
             entry_type=XPLedgerEntry.ENTRY_EARN,
-            action__slug__in=[d['slug'] for d in ACHIEVEMENT_DEFINITIONS if d['slug'] != 'first_win'],
+            action__slug__in=[a.slug for a in actions if a.slug != FIRST_WIN_SLUG],
         ).select_related('action').order_by('created_at')
     }
-    has_first_win = _has_first_win(user)
+    # Only pay for the cross-game query if that achievement is actually
+    # enabled - staff can switch it off like any other row.
+    has_first_win = _has_first_win(user) if any(a.slug == FIRST_WIN_SLUG for a in actions) else False
 
     results = []
-    for definition in ACHIEVEMENT_DEFINITIONS:
-        slug = definition['slug']
-        if slug == 'first_win':
+    for action in actions:
+        if action.slug == FIRST_WIN_SLUG:
             unlocked = has_first_win
             earned_at = None
         else:
-            unlocked = slug in earned_slugs
-            earned_at = earned_slugs.get(slug)
+            unlocked = action.slug in earned_slugs
+            earned_at = earned_slugs.get(action.slug)
         results.append({
-            'slug': slug,
-            'label': definition['label'],
+            'slug': action.slug,
+            'label': action.display_label,
+            'description': action.description,
+            'icon': action.icon,
             'unlocked': unlocked,
             'earned_at': earned_at,
         })

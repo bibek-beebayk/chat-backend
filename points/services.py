@@ -107,6 +107,64 @@ def apply_adjustment(user, staff_user, points_delta, note=''):
     return balance, entry
 
 
+def _grant_round_xp(user, metadata, ledger_entry):
+    """
+    Best-effort "a round was played" XP signal, fired automatically from
+    both settle_wager() and debit_balance() below - every wager-based game
+    calls one of the two to charge the player (there is no other way to
+    move money), so this is what makes a new game challenge-eligible with
+    NO xp_hooks.py of its own: it only ever needs metadata={'game': '<slug>',
+    ...} on its debit, which every caller already passes for its own
+    record-keeping anyway.
+
+    Fires the two shared, cross-game actions - qualified_gameplay (capped
+    XP trickle) and gameplay_round (uncapped, 0 XP - what a "play N
+    rounds, any game" challenge sources on) - plus, if they exist, this
+    game's own <slug>_qualified_gameplay and <slug>_gameplay_round
+    counterparts, which let a challenge be scoped to just this game
+    instead of every game (see xp/admin.py's Challenge fieldset). Those
+    two per-game actions are entirely optional: award_xp() raising
+    XPAction.DoesNotExist because a game has no per-game counter seeded is
+    swallowed exactly like a daily cap or a not-yet-eligible challenge
+    would be - so a brand-new game gets the two shared actions for free
+    the moment it exists, and can be scoped to specifically later purely
+    by creating one XPAction row (slug=f'{game}_gameplay_round') in
+    admin. No code, no migration, no deploy.
+
+    Lazy-imports xp.services/xp.models to avoid a hard points -> xp
+    dependency at module load time (points is a lower-level app several
+    others import - mirrors the lazy cross-app imports already used
+    elsewhere, e.g. games/views.py's cross-game stat queries). Entirely
+    best-effort: nothing here may ever propagate and roll back the wallet
+    movement it's called after.
+    """
+    game_slug = (metadata or {}).get('game')
+    if not game_slug:
+        return  # not a game-attributed debit (e.g. a manual admin adjustment) - nothing to award
+
+    from xp.models import XPAction
+    from xp.services import ChallengeNotYetEligible
+    from xp.services import DailyCapExceeded as XPDailyCapExceeded
+    from xp.services import award_matching_challenges, award_xp
+
+    for slug in (
+        'qualified_gameplay',
+        f'{game_slug}_qualified_gameplay',
+        'gameplay_round',
+        f'{game_slug}_gameplay_round',
+    ):
+        try:
+            award_xp(user, slug, idempotency_key=f'{slug}:{ledger_entry.id}', note=f'{slug} ({game_slug})')
+        except (XPAction.DoesNotExist, XPDailyCapExceeded, ChallengeNotYetEligible):
+            pass
+
+    # award_matching_challenges is itself fully best-effort per challenge
+    # and simply finds nothing when a source slug has no XPAction - no
+    # try/except needed here, matching how every game hook already calls it.
+    award_matching_challenges(user, source_action_slug='gameplay_round', note=f'Challenge: play rounds ({game_slug})')
+    award_matching_challenges(user, source_action_slug=f'{game_slug}_gameplay_round', note=f'Challenge: play {game_slug} rounds')
+
+
 @transaction.atomic
 def settle_wager(user, *, wager_amount, payout_amount, entry_type=PointsLedgerEntry.ENTRY_GAME_ROUND,
                   metadata=None, note=''):
@@ -136,6 +194,7 @@ def settle_wager(user, *, wager_amount, payout_amount, entry_type=PointsLedgerEn
         metadata=metadata or {},
         note=note,
     )
+    _grant_round_xp(user, metadata, entry)
     return balance, entry
 
 
@@ -169,6 +228,7 @@ def debit_balance(user, *, amount, entry_type=PointsLedgerEntry.ENTRY_GAME_ROUND
         metadata=metadata or {},
         note=note,
     )
+    _grant_round_xp(user, metadata, entry)
     return balance, entry
 
 

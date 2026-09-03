@@ -468,14 +468,21 @@ class HiLoXPTests(TestCase):
         PointsBalance.objects.create(user=self.user, balance=100000)
 
     def test_a_capped_xp_award_never_rolls_back_the_settlement(self):
+        # hilo.xp_hooks.grant_hilo_xp is now purely resolution-specific
+        # (gameplay/challenge XP for just playing a round moved to
+        # points.services._grant_round_xp at bet-placement time - see
+        # HiLoRound's docstring) - so this needs a scenario that actually
+        # reaches one of what's left, a cashout-threshold achievement:
+        # Q -> A is a single win that clears both the 2x and 5x thresholds.
         from xp.services import DailyCapExceeded
 
-        with mock.patch('hilo.services.draw_card', return_value={'rank': '7', 'suit': 'spades'}):
+        with mock.patch('hilo.services.draw_card', return_value={'rank': 'Q', 'suit': 'spades'}):
             round_obj, _ = start_round(self.user, wager_amount=Decimal('100'))
-        with mock.patch('hilo.services.draw_card', return_value={'rank': 'K', 'suit': 'hearts'}):
+        with mock.patch('hilo.services.draw_card', return_value={'rank': 'A', 'suit': 'hearts'}):
             predict(self.user, direction='higher', step_index=0)
+        self.assertGreaterEqual(HiLoRound.objects.get(pk=round_obj.pk).multiplier, Decimal('5'))
 
-        with mock.patch('hilo.xp_hooks.award_xp', side_effect=DailyCapExceeded('qualified_gameplay')):
+        with mock.patch('hilo.xp_hooks.award_xp', side_effect=DailyCapExceeded('hilo_cashout_above_2x')):
             round_obj = cash_out(self.user)
 
         self.assertEqual(round_obj.status, HiLoRound.STATUS_CASHED_OUT)

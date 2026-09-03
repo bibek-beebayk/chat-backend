@@ -628,9 +628,11 @@ class PlinkoGameplayXPHookTests(TestCase):
     Relies on the seeded XPAction rows from xp/migrations/0002_seed_xp_actions.py:
     qualified_gameplay (+2 XP, max_awards_per_day=25) and
     daily_challenge_rounds (+30 XP, challenge_target_count=3, sourced from
-    qualified_gameplay). Covers both play_round (Classic) and
-    play_free_drop_round (Free Drop) since both call the same
-    plinko.xp_hooks.grant_gameplay_xp() helper.
+    gameplay_round). Covers both play_round (Classic) and
+    play_free_drop_round (Free Drop) since both settle through
+    points.services.settle_wager(), which is what actually fires this XP -
+    see points.services._grant_round_xp. Plinko has no xp_hooks.py of its
+    own anymore.
     """
 
     def setUp(self):
@@ -679,6 +681,28 @@ class PlinkoGameplayXPHookTests(TestCase):
         self.assertEqual(
             XPLedgerEntry.objects.filter(user=self.user, action__slug='qualified_gameplay').count(), 1,
         )
+
+    def test_plinko_only_round_counter_fires_every_round(self):
+        # plinko_gameplay_round (see plinko/migrations/0007) is what lets a
+        # challenge be scoped to just this game, distinct from the shared
+        # gameplay_round every game fires.
+        play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+        self.assertEqual(
+            XPLedgerEntry.objects.filter(user=self.user, action__slug='plinko_gameplay_round').count(), 2,
+        )
+
+    def test_a_challenge_scoped_to_plinko_only_is_reachable_from_a_real_round(self):
+        from xp.models import XPAction
+        challenge = XPAction.objects.create(
+            slug='plinko_only_test_challenge', label='Plinko Only', xp_value=25, is_active=True,
+            challenge_target_count=1,
+        )
+        challenge.challenge_source_actions.set([XPAction.objects.get(slug='plinko_gameplay_round')])
+
+        play_round(self.user, rows=8, risk_level='low', wager_amount=5)
+
+        self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=challenge).exists())
 
     def test_xp_award_never_blocks_or_rolls_back_the_wager(self):
         # Even with a misconfigured/deactivated XPAction, the round and

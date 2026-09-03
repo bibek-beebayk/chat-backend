@@ -14,6 +14,7 @@ from .services import (
     apply_adjustment,
     award_points,
     create_redemption_request,
+    debit_balance,
     review_redemption_request,
     settle_wager,
 )
@@ -199,6 +200,93 @@ class PointsServiceTests(TestCase):
     def test_apply_adjustment_rejects_zero_delta(self):
         with self.assertRaises(ValueError):
             apply_adjustment(self.user, self.staff, 0)
+
+
+class GenericRoundXPTests(TestCase):
+    """
+    points.services._grant_round_xp - the generic "a round was played" XP
+    signal fired automatically by settle_wager() and debit_balance() below,
+    keyed off metadata['game']. This is what a new game gets for free
+    (qualified_gameplay + gameplay_round, and its own <slug>_* counterparts
+    if seeded) purely by charging a wager the normal way, with no
+    xp_hooks.py of its own - see the docstring on _grant_round_xp.
+    """
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='round-xp-player', email='round-xp-player@example.com',
+            password='test-pass-123', user_type='player',
+        )
+        PointsBalance.objects.create(user=self.user, balance=1000)
+
+    def test_settle_wager_fires_the_two_shared_actions_for_a_new_game(self):
+        from xp.models import XPAction
+        from xp.models import XPLedgerEntry as XPLedger
+
+        # A game slug with NO per-game XPAction rows seeded at all - proves
+        # the shared actions still fire, and the optional per-game ones
+        # (fictional_qualified_gameplay / fictional_gameplay_round) are
+        # silently skipped rather than erroring.
+        settle_wager(self.user, wager_amount=Decimal('10'), payout_amount=Decimal('0'), metadata={'game': 'fictional'})
+
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action__slug='qualified_gameplay').exists())
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action__slug='gameplay_round').exists())
+        self.assertFalse(XPAction.objects.filter(slug='fictional_gameplay_round').exists())
+
+    def test_debit_balance_fires_the_same_signal_as_settle_wager(self):
+        from xp.models import XPLedgerEntry as XPLedger
+
+        debit_balance(self.user, amount=Decimal('10'), metadata={'game': 'fictional'})
+
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action__slug='qualified_gameplay').exists())
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action__slug='gameplay_round').exists())
+
+    def test_per_game_counters_fire_when_they_exist(self):
+        from xp.models import XPAction
+        from xp.models import XPLedgerEntry as XPLedger
+
+        XPAction.objects.create(slug='newgame_gameplay_round', label='New Game Rounds', xp_value=0, is_active=True)
+
+        settle_wager(self.user, wager_amount=Decimal('10'), payout_amount=Decimal('0'), metadata={'game': 'newgame'})
+
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action__slug='newgame_gameplay_round').exists())
+
+    def test_a_challenge_scoped_to_a_brand_new_game_fires_via_the_generic_signal(self):
+        """
+        The end-to-end promise: create ONE XPAction (the per-game counter)
+        plus a challenge sourced on it - entirely in admin/data, no code -
+        and a plain settle_wager() call for that game makes it progress.
+        """
+        from xp.models import XPAction
+        from xp.models import XPLedgerEntry as XPLedger
+
+        counter = XPAction.objects.create(slug='indie_gameplay_round', label='Indie Rounds', xp_value=0, is_active=True)
+        challenge = XPAction.objects.create(
+            slug='indie_daily_challenge', label='Play Indie', xp_value=25, is_active=True,
+            challenge_target_count=1,
+        )
+        challenge.challenge_source_actions.set([counter])
+
+        settle_wager(self.user, wager_amount=Decimal('10'), payout_amount=Decimal('0'), metadata={'game': 'indie'})
+
+        self.assertTrue(XPLedger.objects.filter(user=self.user, action=challenge).exists())
+
+    def test_no_game_in_metadata_awards_nothing(self):
+        # A non-gameplay debit (e.g. a manual staff adjustment elsewhere in
+        # the codebase) must never be mistaken for a played round.
+        from xp.models import XPLedgerEntry as XPLedger
+
+        settle_wager(self.user, wager_amount=Decimal('10'), payout_amount=Decimal('0'), metadata={'note': 'not a game'})
+
+        self.assertFalse(XPLedger.objects.filter(user=self.user).exists())
+
+    def test_a_capped_xp_action_never_blocks_the_wager_settlement(self):
+        from xp.models import XPAction
+        XPAction.objects.filter(slug='qualified_gameplay').update(max_awards_per_day=0)
+
+        balance, entry = settle_wager(self.user, wager_amount=Decimal('10'), payout_amount=Decimal('5'), metadata={'game': 'fictional'})
+
+        self.assertEqual(balance.balance, Decimal('995'))  # wager still settled despite the capped XP action
 
 
 class RedemptionConfigTests(TestCase):

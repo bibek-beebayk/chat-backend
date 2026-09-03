@@ -82,14 +82,27 @@ def award_xp(user, action_slug, *, idempotency_key='', metadata=None, note='', a
             raise DailyCapExceeded(action.slug)
 
     if action.challenge_target_count is not None:
-        today_source_count = XPLedgerEntry.objects.filter(
+        now = timezone.now()
+        if not action.is_challenge_open(now=now):
+            # Outside the challenge's window entirely - not started yet, or
+            # (an event) already closed. Reused ChallengeNotYetEligible for
+            # both cases rather than a new exception, so every existing
+            # best-effort call site (every game's xp_hooks.py) keeps
+            # working unchanged - they already catch this one.
+            raise ChallengeNotYetEligible(action.slug, 0, action.challenge_target_count)
+
+        window_start, window_end = action.challenge_window(now=now)
+        source_qs = XPLedgerEntry.objects.filter(
             user=user,
-            action_id=action.challenge_source_action_id,
+            action_id__in=action.challenge_source_actions.values_list('id', flat=True),
             entry_type=XPLedgerEntry.ENTRY_EARN,
-            created_at__date=timezone.localdate(),
-        ).count()
-        if today_source_count < action.challenge_target_count:
-            raise ChallengeNotYetEligible(action.slug, today_source_count, action.challenge_target_count)
+            created_at__gte=window_start,
+        )
+        if window_end is not None:
+            source_qs = source_qs.filter(created_at__lte=window_end)
+        window_source_count = source_qs.count()
+        if window_source_count < action.challenge_target_count:
+            raise ChallengeNotYetEligible(action.slug, window_source_count, action.challenge_target_count)
 
     balance, _ = XPBalance.objects.select_for_update().get_or_create(user=user)
     old_rank_slug = balance.rank_slug or rank_for_xp(0).slug
@@ -126,6 +139,50 @@ def award_xp(user, action_slug, *, idempotency_key='', metadata=None, note='', a
         _apply_rank_up_bonus(user, new_tier, balance)
 
     return entry
+
+
+def award_matching_challenges(user, *, source_action_slug, note=''):
+    """
+    Attempts every currently configured challenge that counts
+    `source_action_slug` (e.g. 'gameplay_round', or a per-game counter like
+    'plinko_gameplay_round') among its source actions - called once by a
+    game right after it fires that counter action.
+
+    This is what makes a brand-new daily, weekly, or event challenge -
+    scoped to one game, several games, or every game - buildable purely
+    from Django admin. Before this, each game hardcoded the one challenge
+    slug ('daily_challenge_rounds') it attempted to award, so a second
+    "play N rounds"-shaped challenge needed a matching code change in
+    every game's xp_hooks.py. This discovers every XPAction configured
+    against that source instead, so nothing here needs to change when
+    staff adds one, however it's scoped - the game-scoping (which of the
+    per-game counters a challenge lists in challenge_source_actions) and
+    the period (daily/weekly/event) both live on XPAction itself, not here.
+
+    Each challenge is attempted independently and best-effort - one being
+    not-yet-eligible, capped, or misconfigured must never block another,
+    and none of this may ever propagate to the caller, which is always a
+    wallet-settlement hook.
+    """
+    challenges = XPAction.objects.filter(
+        is_active=True,
+        challenge_source_actions__slug=source_action_slug,
+        challenge_target_count__isnull=False,
+    ).distinct()
+    for action in challenges:
+        # The period key changes when a recurring window rolls over (a new
+        # day, a new week), so the same weekly challenge is earnable again
+        # next week under a fresh idempotency key - and an event, which has
+        # exactly one instance ever, keys off its own id instead.
+        idempotency_key = f'{action.slug}:{user.id}:{action.challenge_period_key()}'
+        try:
+            award_xp(
+                user, action.slug,
+                idempotency_key=idempotency_key,
+                note=note or f'Challenge: {action.label}',
+            )
+        except (XPAction.DoesNotExist, DailyCapExceeded, ChallengeNotYetEligible):
+            pass
 
 
 @transaction.atomic

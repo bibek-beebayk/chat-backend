@@ -16,7 +16,15 @@ class XPActionSerializer(serializers.ModelSerializer):
             'description',
             'max_awards_per_day',
             'challenge_target_count',
-            'challenge_source_action',
+            'challenge_source_actions',
+            'challenge_period',
+            'event_starts_at',
+            'event_ends_at',
+            'is_daily_checklist',
+            'is_achievement',
+            'display_order',
+            'action_url',
+            'icon',
         ]
 
 
