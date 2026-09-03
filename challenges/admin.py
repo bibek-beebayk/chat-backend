@@ -17,13 +17,14 @@ from django import forms
 from django.contrib import admin
 
 from xp.models import XPAction
-from .models import DailyChallenge, DailyRotationConfig, SpecialChallenge, WeeklyChallenge
+from .models import DailyChallenge, RotationConfig, SpecialChallenge, WeeklyChallenge
 
 REQUIRED_FIELDS = ['label', 'slug', 'xp_value', 'challenge_target_count', 'challenge_source_actions']
 OPTIONAL_FIELDS = ['description', 'is_active', 'is_daily_checklist', 'display_order', 'action_url', 'icon']
-# Daily only - see XPAction.rotation_pool's help text and clean() (rejects
-# it on Weekly/Special), so it has no business appearing on those forms.
-DAILY_OPTIONAL_FIELDS = OPTIONAL_FIELDS + ['rotation_pool']
+# Daily and Weekly only - see XPAction.rotation_pool's help text and
+# clean() (rejects it on Special/Event, which never repeats so "rotation"
+# has no meaning for it), so it has no business on that form.
+ROTATING_OPTIONAL_FIELDS = OPTIONAL_FIELDS + ['rotation_pool']
 
 
 class _ChallengeFormBase(forms.ModelForm):
@@ -65,7 +66,7 @@ class DailyChallengeForm(_ChallengeFormBase):
 
     class Meta:
         model = DailyChallenge
-        fields = REQUIRED_FIELDS + DAILY_OPTIONAL_FIELDS
+        fields = REQUIRED_FIELDS + ROTATING_OPTIONAL_FIELDS
 
 
 class WeeklyChallengeForm(_ChallengeFormBase):
@@ -73,7 +74,7 @@ class WeeklyChallengeForm(_ChallengeFormBase):
 
     class Meta:
         model = WeeklyChallenge
-        fields = REQUIRED_FIELDS + OPTIONAL_FIELDS
+        fields = REQUIRED_FIELDS + ROTATING_OPTIONAL_FIELDS
 
 
 class SpecialChallengeForm(_ChallengeFormBase):
@@ -108,6 +109,21 @@ class _ChallengeAdminBase(admin.ModelAdmin):
         return ', '.join(slugs) if slugs else '—'
 
 
+class _RotatingChallengeAdminBase(_ChallengeAdminBase):
+    """
+    Shared by Daily and Weekly - the two periods that support rotation.
+    Special/Event doesn't subclass this; it has neither the field nor the
+    "is it live right now" column, since an event has only ever one window,
+    not a recurring one to rotate.
+    """
+    list_display = _ChallengeAdminBase.list_display + ('rotation_pool', 'currently_live')
+    list_filter = _ChallengeAdminBase.list_filter + ('rotation_pool',)
+
+    @admin.display(description='Live now', boolean=True)
+    def currently_live(self, obj):
+        return obj.is_challenge_open()
+
+
 TARGET_DESCRIPTION = (
     'Tick which game(s) count: tick just one per-game round counter (e.g. '
     '"Plinko Rounds") to scope this to that game only, tick several to '
@@ -125,45 +141,42 @@ MORE_OPTIONS_FIELDSET = ('More options', {
         'uses.'
     ),
 })
-DAILY_MORE_OPTIONS_FIELDSET = ('More options', {
-    'fields': tuple(DAILY_OPTIONAL_FIELDS),
-    'classes': ('collapse',),
-    'description': (
-        MORE_OPTIONS_FIELDSET[1]['description'] + ' Tick "rotation pool" to '
-        'have this challenge only appear on some days instead of every '
-        'day - see Daily Rotation Settings for how many pool challenges '
-        'are live at once.'
-    ),
-})
+
+
+def _rotating_more_options_fieldset(period_label):
+    return ('More options', {
+        'fields': tuple(ROTATING_OPTIONAL_FIELDS),
+        'classes': ('collapse',),
+        'description': (
+            MORE_OPTIONS_FIELDSET[1]['description'] + ' Tick "rotation pool" '
+            f'to have this challenge only appear on some {period_label}s '
+            'instead of every one - see Rotation Settings for how many '
+            'pool challenges are live at once.'
+        ),
+    })
 
 
 @admin.register(DailyChallenge)
-class DailyChallengeAdmin(_ChallengeAdminBase):
+class DailyChallengeAdmin(_RotatingChallengeAdminBase):
     form = DailyChallengeForm
-    list_display = _ChallengeAdminBase.list_display + ('rotation_pool', 'live_today')
-    list_filter = _ChallengeAdminBase.list_filter + ('rotation_pool',)
     fieldsets = (
         (None, {
             'fields': ('label', 'slug', 'xp_value', 'challenge_target_count', 'challenge_source_actions'),
             'description': f'Resets every day at local midnight. {TARGET_DESCRIPTION}',
         }),
-        DAILY_MORE_OPTIONS_FIELDSET,
+        _rotating_more_options_fieldset('day'),
     )
-
-    @admin.display(description='Live today', boolean=True)
-    def live_today(self, obj):
-        return obj.is_challenge_open()
 
 
 @admin.register(WeeklyChallenge)
-class WeeklyChallengeAdmin(_ChallengeAdminBase):
+class WeeklyChallengeAdmin(_RotatingChallengeAdminBase):
     form = WeeklyChallengeForm
     fieldsets = (
         (None, {
             'fields': ('label', 'slug', 'xp_value', 'challenge_target_count', 'challenge_source_actions'),
             'description': f'Resets every Monday at local midnight. {TARGET_DESCRIPTION}',
         }),
-        MORE_OPTIONS_FIELDSET,
+        _rotating_more_options_fieldset('week'),
     )
 
 
@@ -187,18 +200,20 @@ class SpecialChallengeAdmin(_ChallengeAdminBase):
     )
 
 
-@admin.register(DailyRotationConfig)
-class DailyRotationConfigAdmin(admin.ModelAdmin):
+@admin.register(RotationConfig)
+class RotationConfigAdmin(admin.ModelAdmin):
     """
-    Singleton settings row (see DailyRotationConfig.get_solo) - mirrors
+    Singleton settings row (see RotationConfig.get_solo) - mirrors
     points.admin.PointsRedemptionConfigAdmin's exact pattern: one row,
-    can't be added again, can't be deleted, just edited in place.
+    can't be added again, can't be deleted, just edited in place. Two
+    independent counts, one per rotating period - a Daily pool and a
+    Weekly pool never share a count.
     """
-    list_display = ('active_count', 'updated_by', 'updated_at')
+    list_display = ('daily_active_count', 'weekly_active_count', 'updated_by', 'updated_at')
     readonly_fields = ('updated_at',)
 
     def has_add_permission(self, request):
-        return not DailyRotationConfig.objects.exists()
+        return not RotationConfig.objects.exists()
 
     def has_delete_permission(self, request, obj=None):
         return False

@@ -419,12 +419,12 @@ class ChallengePeriodTests(TestCase):
         self.assertTrue(XPLedgerEntry.objects.filter(user=self.user, action=challenge).exists())
 
 
-class DailyRotationTests(TestCase):
+class RotationTests(TestCase):
     """
-    Daily challenge rotation - the pure selection function
-    (todays_rotation_pool_ids), the model-level plumbing that calls it
-    (XPAction.is_in_todays_rotation / is_challenge_open), and the
-    DailyRotationConfig singleton that controls how many are live.
+    Daily and Weekly challenge rotation - the pure selection function
+    (current_rotation_pool_ids), the model-level plumbing that calls it
+    (XPAction.is_in_current_rotation / is_challenge_open), and the
+    RotationConfig singleton that controls how many of each are live.
     """
 
     def setUp(self):
@@ -434,48 +434,48 @@ class DailyRotationTests(TestCase):
 
     # --- the pure function - no DB, no model instances ---
 
-    def test_selection_is_deterministic_for_the_same_pool_and_date(self):
-        from .models import todays_rotation_pool_ids
+    def test_selection_is_deterministic_for_the_same_pool_and_period(self):
+        from .models import current_rotation_pool_ids
         pool = [(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')]
-        first = todays_rotation_pool_ids(pool, count=2, date_key='2026-09-04')
-        second = todays_rotation_pool_ids(pool, count=2, date_key='2026-09-04')
+        first = current_rotation_pool_ids(pool, count=2, period_key='2026-09-04')
+        second = current_rotation_pool_ids(pool, count=2, period_key='2026-09-04')
         self.assertEqual(first, second)
         self.assertEqual(len(first), 2)
 
-    def test_selection_changes_on_a_different_date(self):
-        from .models import todays_rotation_pool_ids
+    def test_selection_changes_on_a_different_period(self):
+        from .models import current_rotation_pool_ids
         pool = [(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')]
-        today = todays_rotation_pool_ids(pool, count=2, date_key='2026-09-04')
-        tomorrow = todays_rotation_pool_ids(pool, count=2, date_key='2026-09-05')
+        this_period = current_rotation_pool_ids(pool, count=2, period_key='2026-09-04')
+        next_period = current_rotation_pool_ids(pool, count=2, period_key='2026-09-05')
         # Not a hard guarantee for every possible pool (a 2-of-5 draw could
-        # coincidentally repeat), but true for this fixed pool/dates pair -
-        # pinned here as a concrete demonstration that the date genuinely
-        # changes the outcome, not just a same-every-day constant.
-        self.assertNotEqual(today, tomorrow)
+        # coincidentally repeat), but true for this fixed pool/keys pair -
+        # pinned here as a concrete demonstration that the period key
+        # genuinely changes the outcome, not just a same-every-time constant.
+        self.assertNotEqual(this_period, next_period)
 
     def test_count_at_or_above_pool_size_returns_the_whole_pool(self):
-        from .models import todays_rotation_pool_ids
+        from .models import current_rotation_pool_ids
         pool = [(1, 'a'), (2, 'b'), (3, 'c')]
-        self.assertEqual(todays_rotation_pool_ids(pool, count=10, date_key='2026-09-04'), {1, 2, 3})
+        self.assertEqual(current_rotation_pool_ids(pool, count=10, period_key='2026-09-04'), {1, 2, 3})
 
     def test_zero_count_selects_nothing(self):
-        from .models import todays_rotation_pool_ids
+        from .models import current_rotation_pool_ids
         pool = [(1, 'a'), (2, 'b'), (3, 'c')]
-        self.assertEqual(todays_rotation_pool_ids(pool, count=0, date_key='2026-09-04'), set())
+        self.assertEqual(current_rotation_pool_ids(pool, count=0, period_key='2026-09-04'), set())
 
     def test_empty_pool_is_safe(self):
-        from .models import todays_rotation_pool_ids
-        self.assertEqual(todays_rotation_pool_ids([], count=3, date_key='2026-09-04'), set())
+        from .models import current_rotation_pool_ids
+        self.assertEqual(current_rotation_pool_ids([], count=3, period_key='2026-09-04'), set())
 
     # --- the model/DB layer ---
 
     def test_non_pool_challenge_is_always_in_rotation(self):
         action = _create_challenge(slug='rotation_not_pooled', label='Not Pooled', xp_value=5, is_active=True)
-        self.assertTrue(action.is_in_todays_rotation())
+        self.assertTrue(action.is_in_current_rotation())
 
-    def test_exactly_active_count_of_the_pool_is_selected(self):
-        from challenges.models import DailyRotationConfig
-        DailyRotationConfig.objects.update_or_create(pk=1, defaults={'active_count': 2})
+    def test_exactly_daily_active_count_of_the_daily_pool_is_selected(self):
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 2})
 
         pool = [
             _create_challenge(
@@ -484,12 +484,61 @@ class DailyRotationTests(TestCase):
             )
             for i in range(5)
         ]
-        live = [a for a in pool if a.is_in_todays_rotation()]
+        live = [a for a in pool if a.is_in_current_rotation()]
         self.assertEqual(len(live), 2)
 
-    def test_rotation_selection_is_stable_within_the_same_day(self):
-        from challenges.models import DailyRotationConfig
-        DailyRotationConfig.objects.update_or_create(pk=1, defaults={'active_count': 2})
+    def test_exactly_weekly_active_count_of_the_weekly_pool_is_selected(self):
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'weekly_active_count': 1})
+
+        pool = [
+            _create_challenge(
+                slug=f'weekly_rotation_pool_{i}', label=f'Weekly Pool {i}', xp_value=5, is_active=True,
+                rotation_pool=True, challenge_period=XPAction.PERIOD_WEEKLY,
+            )
+            for i in range(4)
+        ]
+        live = [a for a in pool if a.is_in_current_rotation()]
+        self.assertEqual(len(live), 1)
+
+    def test_daily_and_weekly_pools_never_compete_for_the_same_slots(self):
+        """
+        A Daily pool challenge and a Weekly pool challenge must be ranked
+        and selected entirely independently - one's count and rotation
+        must never be influenced by the other's pool membership.
+        """
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 5, 'weekly_active_count': 5})
+
+        daily_pool = [
+            _create_challenge(
+                slug=f'isolation_daily_{i}', label=f'Daily {i}', xp_value=5, is_active=True,
+                rotation_pool=True, challenge_period=XPAction.PERIOD_DAILY,
+            )
+            for i in range(2)
+        ]
+        weekly_pool = [
+            _create_challenge(
+                slug=f'isolation_weekly_{i}', label=f'Weekly {i}', xp_value=5, is_active=True,
+                rotation_pool=True, challenge_period=XPAction.PERIOD_WEEKLY,
+            )
+            for i in range(2)
+        ]
+        # Counts of 5 exceed both 2-item pools, so with correct isolation
+        # every challenge in both pools is live - if the pools were ever
+        # merged into one ranking, this would still pass by coincidence, so
+        # the real assertion is the reverse: shrink each count to less than
+        # its own pool and confirm the OTHER pool is unaffected.
+        for a in daily_pool + weekly_pool:
+            self.assertTrue(a.is_in_current_rotation())
+
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 0, 'weekly_active_count': 5})
+        self.assertTrue(all(not a.is_in_current_rotation() for a in daily_pool))
+        self.assertTrue(all(a.is_in_current_rotation() for a in weekly_pool))
+
+    def test_rotation_selection_is_stable_within_the_same_period(self):
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 2})
 
         pool = [
             _create_challenge(
@@ -498,18 +547,18 @@ class DailyRotationTests(TestCase):
             )
             for i in range(4)
         ]
-        first_pass = {a.slug for a in pool if a.is_in_todays_rotation()}
-        second_pass = {a.slug for a in pool if a.is_in_todays_rotation()}
+        first_pass = {a.slug for a in pool if a.is_in_current_rotation()}
+        second_pass = {a.slug for a in pool if a.is_in_current_rotation()}
         self.assertEqual(first_pass, second_pass)
 
     def test_a_dormant_pool_challenge_cannot_be_earned_even_if_the_target_is_met(self):
         """
         Rotation must gate eligibility, not just display - a challenge left
-        out of today's rotation must not be quietly earnable in the
+        out of the current rotation must not be quietly earnable in the
         background while merely hidden from the checklist.
         """
-        from challenges.models import DailyRotationConfig
-        DailyRotationConfig.objects.update_or_create(pk=1, defaults={'active_count': 0})  # nothing live today
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 0})  # nothing live
 
         source = _create_challenge(slug='rotation_dormant_source', label='Source', xp_value=0, is_active=True)
         challenge = _create_challenge(
@@ -522,21 +571,27 @@ class DailyRotationTests(TestCase):
         with self.assertRaises(ChallengeNotYetEligible):
             award_xp(self.user, challenge.slug)
 
-    def test_model_validation_rejects_rotation_pool_on_a_non_daily_challenge(self):
+    def test_model_validation_accepts_rotation_pool_on_daily_and_weekly(self):
+        for period in (XPAction.PERIOD_DAILY, XPAction.PERIOD_WEEKLY):
+            action = XPAction(slug=f'rotation_ok_{period}', label='OK', xp_value=5, challenge_period=period, rotation_pool=True)
+            action.clean()  # must not raise
+
+    def test_model_validation_rejects_rotation_pool_on_an_event_challenge(self):
         from django.core.exceptions import ValidationError
         action = XPAction(
             slug='rotation_bad_period', label='Bad', xp_value=5,
-            challenge_period=XPAction.PERIOD_WEEKLY, rotation_pool=True,
+            challenge_period=XPAction.PERIOD_EVENT, rotation_pool=True,
+            event_starts_at=timezone.now(), event_ends_at=timezone.now() + timedelta(days=1),
         )
         with self.assertRaises(ValidationError):
             action.clean()
 
     def test_get_solo_is_a_true_singleton(self):
-        from challenges.models import DailyRotationConfig
-        first = DailyRotationConfig.get_solo()
-        second = DailyRotationConfig.get_solo()
+        from challenges.models import RotationConfig
+        first = RotationConfig.get_solo()
+        second = RotationConfig.get_solo()
         self.assertEqual(first.pk, second.pk)
-        self.assertEqual(DailyRotationConfig.objects.count(), 1)
+        self.assertEqual(RotationConfig.objects.count(), 1)
 
 
 class DailyProgressViewTests(TestCase):
@@ -666,8 +721,8 @@ class DailyProgressViewTests(TestCase):
         self.assertNotIn('event_checklist_past', slugs)
 
     def test_only_todays_rotation_pool_challenges_appear_on_the_checklist(self):
-        from challenges.models import DailyRotationConfig
-        DailyRotationConfig.objects.update_or_create(pk=1, defaults={'active_count': 2})
+        from challenges.models import RotationConfig
+        RotationConfig.objects.update_or_create(pk=1, defaults={'daily_active_count': 2})
 
         pool = [
             XPAction.objects.create(

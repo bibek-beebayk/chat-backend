@@ -3,7 +3,7 @@ from django.test import TestCase
 
 from xp.models import XPAction
 from .admin import DailyChallengeForm, SpecialChallengeForm, WeeklyChallengeForm
-from .models import DailyChallenge, DailyRotationConfig, SpecialChallenge, WeeklyChallenge
+from .models import DailyChallenge, RotationConfig, SpecialChallenge, WeeklyChallenge
 
 
 class ChallengeProxyManagerTests(TestCase):
@@ -197,14 +197,39 @@ class ChallengeAdminSiteTests(TestCase):
         created = XPAction.objects.get(slug='admin_rotation_test')
         self.assertTrue(created.rotation_pool)
 
-    def test_rotation_pool_is_not_a_field_on_the_weekly_form(self):
-        # rotation_pool only makes sense for Daily - WeeklyChallengeForm
-        # doesn't include it at all, so posting it is simply ignored
-        # rather than raising, and the saved row keeps the model default.
-        self.assertNotIn('rotation_pool', WeeklyChallengeForm.base_fields)
+    def test_rotation_pool_is_on_both_daily_and_weekly_forms(self):
+        # Daily and Weekly both repeat, so rotation is meaningful for
+        # either - Special never repeats (one fixed window, ever), so it
+        # has no rotation_pool field at all.
+        self.assertIn('rotation_pool', WeeklyChallengeForm.base_fields)
+        self.assertIn('rotation_pool', DailyChallengeForm.base_fields)
+
+    def test_rotation_pool_is_not_a_field_on_the_special_form(self):
+        self.assertNotIn('rotation_pool', SpecialChallengeForm.base_fields)
+
+    def test_creating_a_weekly_challenge_with_rotation_pool_ticked(self):
+        source = XPAction.objects.create(slug='admin_weekly_rotation_source', label='Source', xp_value=0, is_active=True)
+        response = self.client.post('/admin/challenges/weeklychallenge/add/', data={
+            'slug': 'admin_weekly_rotation_test',
+            'label': 'Admin Weekly Rotation Test',
+            'description': '',
+            'xp_value': '5',
+            'is_active': 'on',
+            'challenge_target_count': '1',
+            'challenge_source_actions': [source.pk],
+            'is_daily_checklist': 'on',
+            'rotation_pool': 'on',
+            'display_order': '10',
+            'action_url': '',
+            'icon': '',
+        })
+        self.assertEqual(response.status_code, 302)
+        created = XPAction.objects.get(slug='admin_weekly_rotation_test')
+        self.assertTrue(created.rotation_pool)
+        self.assertEqual(created.challenge_period, XPAction.PERIOD_WEEKLY)
 
 
-class DailyRotationConfigAdminTests(TestCase):
+class RotationConfigAdminTests(TestCase):
     def setUp(self):
         self.staff = get_user_model().objects.create_superuser(
             username='rotation-config-admin', email='rotation-config-admin@example.com', password='test-pass-123',
@@ -212,14 +237,17 @@ class DailyRotationConfigAdminTests(TestCase):
         self.client.force_login(self.staff)
 
     def test_config_screen_is_reachable_and_pre_seeded(self):
-        response = self.client.get('/admin/challenges/dailyrotationconfig/')
+        response = self.client.get('/admin/challenges/rotationconfig/')
         self.assertEqual(response.status_code, 200)
 
     def test_editing_the_singleton_updates_the_same_row(self):
-        DailyRotationConfig.get_solo()  # ensures pk=1 exists
-        response = self.client.post('/admin/challenges/dailyrotationconfig/1/change/', data={
-            'active_count': '5',
+        RotationConfig.get_solo()  # ensures pk=1 exists
+        response = self.client.post('/admin/challenges/rotationconfig/1/change/', data={
+            'daily_active_count': '5',
+            'weekly_active_count': '2',
         })
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(DailyRotationConfig.objects.count(), 1)
-        self.assertEqual(DailyRotationConfig.get_solo().active_count, 5)
+        self.assertEqual(RotationConfig.objects.count(), 1)
+        config = RotationConfig.get_solo()
+        self.assertEqual(config.daily_active_count, 5)
+        self.assertEqual(config.weekly_active_count, 2)

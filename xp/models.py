@@ -14,24 +14,27 @@ def tier_badge_upload_to(instance, filename):
     return f'tier_badges/{instance.slug}.{ext}'
 
 
-def todays_rotation_pool_ids(pool, *, count, date_key):
+def current_rotation_pool_ids(pool, *, count, period_key):
     """
-    Pure, deterministic daily-rotation selection: which `count` ids out of
-    `pool` (an iterable of (id, slug) pairs) are "live" for `date_key` (an
-    ISO date string, e.g. '2026-09-04'). Ranks the whole pool by a stable
-    hash of (date_key, slug) and takes the first `count` - not
-    random.seed(), so the result is reproducible across every server
-    process and every Python version without needing a scheduled task or a
-    stored "today's picks" row: every request that day, everywhere,
-    recomputes the identical answer from nothing but the pool + the date +
-    the count. The set changes automatically at local midnight (a new
-    date_key) and whenever the pool's membership changes.
+    Pure, deterministic rotation selection: which `count` ids out of `pool`
+    (an iterable of (id, slug) pairs) are "live" for `period_key` - an ISO
+    date string identifying which instance of the challenge's period this
+    is (see XPAction.challenge_period_key(): a calendar date for Daily, that
+    week's Monday for Weekly). Ranks the whole pool by a stable hash of
+    (period_key, slug) and takes the first `count` - not random.seed(), so
+    the result is reproducible across every server process and every
+    Python version without needing a scheduled task or a stored "current
+    picks" row: every request within the same period, everywhere,
+    recomputes the identical answer from nothing but the pool + the period
+    key + the count. The set changes automatically the moment period_key
+    does (local midnight for Daily, the next Monday for Weekly) and
+    whenever the pool's membership changes.
 
     count >= len(pool) simply returns the whole pool (no rotation effect,
     matches "0 disables rotation entirely" at the other extreme). Returns
     a set of ids - membership-tested, order doesn't matter to callers.
     """
-    ranked = sorted(pool, key=lambda row: hashlib.sha256(f'{date_key}:{row[1]}'.encode()).hexdigest())
+    ranked = sorted(pool, key=lambda row: hashlib.sha256(f'{period_key}:{row[1]}'.encode()).hexdigest())
     return {row[0] for row in ranked[:count]}
 
 
@@ -148,22 +151,25 @@ class XPAction(models.Model):
         blank=True, null=True,
         help_text='Event period only - the challenge is invisible and cannot be earned after this.',
     )
-    # Opt-in daily rotation: a Daily-period challenge with this set is only
-    # actually live on some days, not every day - which days is decided by
-    # todays_rotation_pool_ids() below, not stored anywhere, so it needs no
-    # scheduled task and is identical across every server process. Only
-    # meaningful for challenge_period == PERIOD_DAILY - see clean(). The
-    # player-facing "how many are live today" knob is
-    # challenges.models.DailyRotationConfig, a singleton staff edits in the
-    # "Challenges" admin section.
+    # Opt-in rotation: a Daily or Weekly challenge with this set is only
+    # actually live during some periods, not every one - which are decided
+    # by current_rotation_pool_ids() above, not stored anywhere, so it
+    # needs no scheduled task and is identical across every server process.
+    # Only meaningful for challenge_period in (PERIOD_DAILY, PERIOD_WEEKLY)
+    # - see clean() (an Event never repeats, so "rotation" has no meaning
+    # for it). The player-facing "how many are live at once" knobs are
+    # challenges.models.RotationConfig.daily_active_count /
+    # weekly_active_count, a singleton staff edits in the "Challenges"
+    # admin section.
     rotation_pool = models.BooleanField(
         default=False,
         help_text=(
-            'Daily challenges only. When on, this challenge is only live '
-            'on some days (a random subset of the whole rotation pool, '
-            'sized by Daily Rotation Settings) rather than every day - '
-            'build a larger pool of these than the daily count and a '
-            'different subset shows each day.'
+            'Daily or Weekly challenges only. When on, this challenge is '
+            'only live during some periods (a random subset of its '
+            'period\'s whole rotation pool, sized by Rotation Settings) '
+            'rather than every period - build a larger pool of these than '
+            'the configured count and a different subset shows each day '
+            '(Daily) or each week (Weekly).'
         ),
     )
 
@@ -224,8 +230,8 @@ class XPAction(models.Model):
         elif self.event_starts_at or self.event_ends_at:
             raise ValidationError('Start/end dates only apply to the Event period - clear them or set the period to Event.')
 
-        if self.rotation_pool and self.challenge_period != self.PERIOD_DAILY:
-            raise ValidationError('Rotation pool only applies to Daily challenges.')
+        if self.rotation_pool and self.challenge_period not in (self.PERIOD_DAILY, self.PERIOD_WEEKLY):
+            raise ValidationError('Rotation pool only applies to Daily or Weekly challenges.')
 
     @property
     def display_label(self):
@@ -280,11 +286,11 @@ class XPAction(models.Model):
         """
         Whether the challenge's window is open right now at all -
         independent of whether the target has been met. Also the single
-        place daily rotation is enforced (see is_in_todays_rotation): both
+        place rotation is enforced (see is_in_current_rotation): both
         xp.services.award_xp()'s eligibility check and
         xp.views.daily_progress_view's display call this one method, so a
-        challenge left out of today's rotation can neither be earned nor
-        shown - never just hidden while still secretly progressing.
+        challenge left out of the current rotation can neither be earned
+        nor shown - never just hidden while still secretly progressing.
         """
         now = now or timezone.now()
         start, end = self.challenge_window(now=now)
@@ -292,17 +298,21 @@ class XPAction(models.Model):
             return False
         if end is not None and now > end:
             return False
-        if self.rotation_pool and not self.is_in_todays_rotation(now=now):
+        if self.rotation_pool and not self.is_in_current_rotation(now=now):
             return False
         return True
 
-    def is_in_todays_rotation(self, *, now=None):
+    def is_in_current_rotation(self, *, now=None):
         """
         Only meaningful when rotation_pool=True (non-pool challenges have
         nothing to check and always return True). Queries the sibling pool
-        - every other active rotation_pool challenge - and defers the
+        - every other active rotation_pool challenge in the SAME
+        challenge_period, so a Daily pool and a Weekly pool never compete
+        against each other for selection or share a count - and defers the
         actual selection to the pure, unit-testable
-        todays_rotation_pool_ids() below.
+        current_rotation_pool_ids() above, keyed by challenge_period_key()
+        so a Daily pool reshuffles at local midnight and a Weekly one
+        reshuffles at the start of each week, not both on the same clock.
 
         Lazy-imports challenges.models to avoid a circular import at
         module load time: challenges/models.py imports XPAction from here
@@ -315,18 +325,21 @@ class XPAction(models.Model):
         if not self.rotation_pool:
             return True
 
-        from challenges.models import DailyRotationConfig
+        from challenges.models import RotationConfig
 
         now = now or timezone.now()
-        date_key = timezone.localtime(now).date().isoformat()
-        count = DailyRotationConfig.get_solo().active_count
+        period_key = self.challenge_period_key(now=now)
+        config = RotationConfig.get_solo()
+        count = config.daily_active_count if self.challenge_period == self.PERIOD_DAILY else config.weekly_active_count
         # XPAction (not type(self)/self.__class__) deliberately - a proxy
         # subclass's own manager (e.g. DailyChallenge's) is scoped to a
         # single period and to challenges only, which would silently
         # exclude part of the pool if this were ever called on a proxy
         # instance instead of a plain XPAction one.
-        pool = XPAction.objects.filter(rotation_pool=True, is_active=True).values_list('id', 'slug')
-        selected_ids = todays_rotation_pool_ids(pool, count=count, date_key=date_key)
+        pool = XPAction.objects.filter(
+            rotation_pool=True, is_active=True, challenge_period=self.challenge_period,
+        ).values_list('id', 'slug')
+        selected_ids = current_rotation_pool_ids(pool, count=count, period_key=period_key)
         return self.id in selected_ids
 
     def challenge_resets_at(self, *, now=None):

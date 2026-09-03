@@ -99,13 +99,14 @@ class XPActionAdmin(admin.ModelAdmin):
                 'Monday, and <strong>Event</strong> runs exactly once '
                 'between the two dates below - invisible and unearnable '
                 'outside that window, and never repeats. <strong>Rotation '
-                'pool</strong> (Daily only) makes this challenge show on '
-                'only some days instead of every day - build a larger pool '
-                'of these than the daily count in Daily Rotation Settings '
-                '(under Challenges in the sidebar) and a different subset '
-                'goes live each day. No further setup needed after saving '
-                '- the next qualifying round from any ticked game picks it '
-                'up automatically (see xp.services.award_matching_challenges).'
+                'pool</strong> (Daily or Weekly only) makes this challenge '
+                'show on only some days or weeks instead of every one - '
+                'build a larger pool of these than the configured count in '
+                'Rotation Settings (under Challenges in the sidebar) and a '
+                'different subset goes live each period. No further setup '
+                'needed after saving - the next qualifying round from any '
+                'ticked game picks it up automatically (see '
+                'xp.services.award_matching_challenges).'
             ),
         }),
         ('Display', {

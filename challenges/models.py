@@ -74,24 +74,35 @@ class SpecialChallenge(XPAction):
         verbose_name_plural = 'Special Challenges'
 
 
-class DailyRotationConfig(models.Model):
+class RotationConfig(models.Model):
     """
     Singleton (always pk=1), admin-editable - mirrors
-    points.models.PointsRedemptionConfig's exact pattern. The one knob for
-    daily challenge rotation: how many of the rotation-pool Daily
-    Challenges (XPAction rows with rotation_pool=True - see xp/models.py's
-    field and todays_rotation_pool_ids()) are actually live on any given
-    day. A Daily Challenge NOT in the pool (rotation_pool=False, the
-    default) is entirely unaffected by this and shows every day, exactly
-    as before this feature existed - rotation is opt-in per challenge, not
-    a global behavior change.
+    points.models.PointsRedemptionConfig's exact pattern. The two knobs for
+    challenge rotation: how many of the rotation-pool Daily Challenges, and
+    separately how many of the rotation-pool Weekly Challenges (XPAction
+    rows with rotation_pool=True - see xp/models.py's field and
+    current_rotation_pool_ids()), are actually live at once. A challenge
+    NOT in a pool (rotation_pool=False, the default) is entirely
+    unaffected by this and shows every period, exactly as before this
+    feature existed - rotation is opt-in per challenge, not a global
+    behavior change. Event challenges have no rotation knob here - each
+    runs exactly once and never repeats, so "rotation" has no meaning for
+    them.
     """
-    active_count = models.PositiveSmallIntegerField(
+    daily_active_count = models.PositiveSmallIntegerField(
         default=3,
         help_text=(
             'How many rotation-pool Daily Challenges are live each day. '
             '0 hides the whole pool. A count at or above the pool size '
             'shows the entire pool every day (no rotation effect).'
+        ),
+    )
+    weekly_active_count = models.PositiveSmallIntegerField(
+        default=1,
+        help_text=(
+            'How many rotation-pool Weekly Challenges are live each week. '
+            '0 hides the whole pool. A count at or above the pool size '
+            'shows the entire pool every week (no rotation effect).'
         ),
     )
     updated_at = models.DateTimeField(auto_now=True)
@@ -103,11 +114,11 @@ class DailyRotationConfig(models.Model):
     )
 
     class Meta:
-        verbose_name = 'Daily Rotation Settings'
-        verbose_name_plural = 'Daily Rotation Settings'
+        verbose_name = 'Rotation Settings'
+        verbose_name_plural = 'Rotation Settings'
 
     def __str__(self):
-        return f'Daily rotation: {self.active_count} live per day'
+        return f'Rotation: {self.daily_active_count}/day, {self.weekly_active_count}/week'
 
     def save(self, *args, **kwargs):
         self.pk = 1
