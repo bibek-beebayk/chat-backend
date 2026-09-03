@@ -1,7 +1,7 @@
 from rest_framework import serializers
-from .models import XPAction, XPBalance
-from .ranks import RANKS_BY_SLUG, next_rank_for_xp, rank_for_xp, sub_level_for_xp
-from .services import RANK_UP_BONUS_RP
+from chat_project.url_utils import build_public_absolute_uri
+from .models import Tier, XPAction, XPBalance
+from .ranks import next_rank_for_xp, rank_by_slug, rank_for_xp, sub_level_for_xp
 
 
 class XPActionSerializer(serializers.ModelSerializer):
@@ -23,6 +23,7 @@ class XPActionSerializer(serializers.ModelSerializer):
 class XPStatusSerializer(serializers.ModelSerializer):
     rank = serializers.SerializerMethodField()
     rank_label = serializers.SerializerMethodField()
+    rank_badge_url = serializers.SerializerMethodField()
     rank_min_xp = serializers.SerializerMethodField()
     next_rank = serializers.SerializerMethodField()
     next_rank_xp = serializers.SerializerMethodField()
@@ -40,6 +41,7 @@ class XPStatusSerializer(serializers.ModelSerializer):
             'total_xp',
             'rank',
             'rank_label',
+            'rank_badge_url',
             'rank_min_xp',
             'next_rank',
             'next_rank_xp',
@@ -58,6 +60,13 @@ class XPStatusSerializer(serializers.ModelSerializer):
 
     def get_rank_label(self, obj):
         return rank_for_xp(obj.total_xp).label
+
+    def get_rank_badge_url(self, obj):
+        slug = rank_for_xp(obj.total_xp).slug
+        tier = Tier.objects.filter(slug=slug).first()
+        if not tier or not tier.badge:
+            return None
+        return build_public_absolute_uri(self.context.get('request'), tier.badge.url)
 
     def get_rank_min_xp(self, obj):
         return rank_for_xp(obj.total_xp).min_xp
@@ -108,11 +117,11 @@ class XPStatusSerializer(serializers.ModelSerializer):
         slug = obj.pending_celebration_rank
         if not slug:
             return None
-        tier = RANKS_BY_SLUG.get(slug)
+        tier = rank_by_slug(slug)
         if not tier:
             return None
         return {
             'rank': tier.slug,
             'rank_label': tier.label,
-            'bonus_rp': RANK_UP_BONUS_RP.get(tier.slug),
+            'bonus_rp': tier.rank_up_bonus_rp or None,
         }

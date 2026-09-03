@@ -1,5 +1,22 @@
 from django.contrib import admin
-from .models import XPAction, XPBalance, XPLedgerEntry
+from django.utils.html import format_html
+from .models import Tier, XPAction, XPBalance, XPLedgerEntry
+
+
+@admin.register(Tier)
+class TierAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'min_xp', 'rank_up_bonus_rp', 'is_active', 'badge_preview', 'updated_at')
+    list_editable = ('min_xp', 'rank_up_bonus_rp', 'is_active')
+    ordering = ('min_xp',)
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('badge_preview', 'created_at', 'updated_at')
+    fields = ('name', 'slug', 'min_xp', 'rank_up_bonus_rp', 'tagline', 'badge', 'badge_preview', 'is_active', 'created_at', 'updated_at')
+
+    @admin.display(description='Badge')
+    def badge_preview(self, obj):
+        if obj.badge:
+            return format_html('<img src="{}" style="height:48px;width:48px;object-fit:contain;" />', obj.badge.url)
+        return '—'
 
 
 @admin.register(XPAction)

@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -6,30 +7,41 @@ from rest_framework.test import APIClient
 from notifications.models import Notification
 from .models import XPAction, XPBalance, XPLedgerEntry
 from points.models import PointsBalance, PointsLedgerEntry
-from .ranks import RANK_THRESHOLDS, next_rank_for_xp, rank_for_xp, sub_level_for_xp, sub_ranges_for_tier
-from .services import ChallengeNotYetEligible, DailyCapExceeded, RANK_UP_BONUS_RP, apply_adjustment, award_xp
+from .models import Tier
+from .ranks import get_rank_tiers, next_rank_for_xp, rank_for_xp, sub_level_for_xp, sub_ranges_for_tier
+from .services import ChallengeNotYetEligible, DailyCapExceeded, apply_adjustment, award_xp, rank_up_bonus_rp
 
 
 class RankThresholdTests(TestCase):
+    def setUp(self):
+        # xp.ranks caches the tier ladder per process and Django's default
+        # LocMem cache is not reset between tests - clear it so a test that
+        # edits Tier rows can't leak a mutated ladder into another test.
+        cache.clear()
+        self.addCleanup(cache.clear)
     def test_rank_for_xp_at_exact_boundaries(self):
-        for tier in RANK_THRESHOLDS:
+        for tier in get_rank_tiers():
             self.assertEqual(rank_for_xp(tier.min_xp).slug, tier.slug)
 
     def test_rank_for_xp_just_below_boundary_stays_previous_tier(self):
-        for previous, tier in zip(RANK_THRESHOLDS, RANK_THRESHOLDS[1:]):
+        tiers = get_rank_tiers()
+        for previous, tier in zip(tiers, tiers[1:]):
             self.assertEqual(rank_for_xp(tier.min_xp - 1).slug, previous.slug)
 
     def test_rank_for_xp_zero_is_first_tier(self):
-        self.assertEqual(rank_for_xp(0).slug, RANK_THRESHOLDS[0].slug)
+        self.assertEqual(rank_for_xp(0).slug, get_rank_tiers()[0].slug)
 
     def test_next_rank_for_xp_top_tier_returns_none(self):
-        top = RANK_THRESHOLDS[-1]
+        top = get_rank_tiers()[-1]
         self.assertIsNone(next_rank_for_xp(top.min_xp))
         self.assertIsNone(next_rank_for_xp(top.min_xp + 100000))
 
     def test_next_rank_for_xp_returns_the_following_tier(self):
-        first, second = RANK_THRESHOLDS[0], RANK_THRESHOLDS[1]
+        first, second = get_rank_tiers()[0], get_rank_tiers()[1]
         self.assertEqual(next_rank_for_xp(first.min_xp).slug, second.slug)
+
+    def test_ladder_is_backed_by_tier_rows(self):
+        self.assertEqual(Tier.objects.filter(is_active=True).count(), len(get_rank_tiers()))
 
 
 class XPServiceTests(TestCase):
@@ -111,7 +123,7 @@ class XPServiceTests(TestCase):
 
         balance = XPBalance.objects.get(user=self.user)
         self.assertEqual(balance.rank_slug, rank_for_xp(1000).slug)
-        self.assertNotEqual(balance.rank_slug, RANK_THRESHOLDS[0].slug)
+        self.assertNotEqual(balance.rank_slug, get_rank_tiers()[0].slug)
         self.assertTrue(Notification.objects.filter(user=self.user, title__icontains='Rank up').exists())
 
     def test_no_rank_up_notification_when_staying_in_same_tier(self):
@@ -293,8 +305,13 @@ class AchievementsViewTests(TestCase):
 
 
 class SubLevelTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
     def test_each_tier_below_the_top_has_three_contiguous_sub_ranges(self):
-        for tier in RANK_THRESHOLDS[:-1]:
+        tiers = get_rank_tiers()
+        for tier in tiers[:-1]:
             ranges = sub_ranges_for_tier(tier.slug)
             self.assertEqual(len(ranges), 3)
             self.assertEqual([r['sub_level_label'] for r in ranges], ['I', 'II', 'III'])
@@ -302,11 +319,11 @@ class SubLevelTests(TestCase):
             # Contiguous, no gaps: each range starts immediately after the previous ends.
             self.assertEqual(ranges[1]['min_xp'], ranges[0]['max_xp'] + 1)
             self.assertEqual(ranges[2]['min_xp'], ranges[1]['max_xp'] + 1)
-            next_tier = RANK_THRESHOLDS[RANK_THRESHOLDS.index(tier) + 1]
+            next_tier = tiers[tiers.index(tier) + 1]
             self.assertEqual(ranges[2]['max_xp'], next_tier.min_xp - 1)
 
     def test_top_tier_has_no_sub_ranges(self):
-        top = RANK_THRESHOLDS[-1]
+        top = get_rank_tiers()[-1]
         self.assertIsNone(sub_ranges_for_tier(top.slug))
 
     def test_sub_level_for_xp_matches_the_right_sub_range(self):
@@ -318,7 +335,7 @@ class SubLevelTests(TestCase):
             self.assertEqual(result['sub_level_max_xp'], sub_range['max_xp'])
 
     def test_sub_level_for_xp_none_for_top_tier(self):
-        top = RANK_THRESHOLDS[-1]
+        top = get_rank_tiers()[-1]
         self.assertIsNone(sub_level_for_xp(top.min_xp))
         self.assertIsNone(sub_level_for_xp(top.min_xp + 100000))
 
@@ -353,7 +370,7 @@ class RankUpBonusTests(TestCase):
     def test_rank_up_to_silver_credits_the_matching_bonus(self):
         big = XPAction.objects.create(slug='rankup-big', label='Big', xp_value=1000, is_active=True)
         award_xp(self.user, big.slug)
-        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['silver'])
+        self.assertEqual(self._ledger_balance(), rank_up_bonus_rp('silver'))
         entry = PointsLedgerEntry.objects.get(user=self.user)
         self.assertEqual(entry.metadata.get('reason'), 'rank_up_bonus')
         self.assertEqual(entry.metadata.get('rank'), 'silver')
@@ -362,7 +379,7 @@ class RankUpBonusTests(TestCase):
     def test_skipping_multiple_tiers_awards_only_the_final_tiers_bonus(self):
         huge = XPAction.objects.create(slug='rankup-huge', label='Huge', xp_value=20000, is_active=True)
         award_xp(self.user, huge.slug)  # bronze -> rollin_elite in one jump
-        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['rollin_elite'])
+        self.assertEqual(self._ledger_balance(), rank_up_bonus_rp('rollin_elite'))
         self.assertEqual(PointsLedgerEntry.objects.filter(user=self.user).count(), 1)
 
     def test_apply_adjustment_also_credits_rank_up_bonus(self):
@@ -370,11 +387,13 @@ class RankUpBonusTests(TestCase):
             username='rankup-staff', email='rankup-staff@example.com', password='test-pass-123', user_type='staff',
         )
         apply_adjustment(self.user, staff, 1000)
-        self.assertEqual(self._ledger_balance(), RANK_UP_BONUS_RP['silver'])
+        self.assertEqual(self._ledger_balance(), rank_up_bonus_rp('silver'))
 
 
 class RankTiersViewTests(TestCase):
     def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
         self.user = get_user_model().objects.create_user(
             username='tiers-player',
             email='tiers-player@example.com',
@@ -410,6 +429,23 @@ class RankTiersViewTests(TestCase):
         bronze = next(t for t in response.data['tiers'] if t['slug'] == 'bronze')
         self.assertIsNone(bronze['rank_up_bonus_rp'])
 
+    def test_tiers_expose_a_badge_url_field_backed_by_the_model(self):
+        response = self.client.get(reverse('xp-rank-tiers'))
+        for tier in response.data['tiers']:
+            self.assertIn('badge_url', tier)
+            self.assertIsNone(tier['badge_url'])  # no artwork uploaded in tests
+
+    def test_editing_a_tier_row_changes_the_ladder(self):
+        Tier.objects.filter(slug='silver').update(min_xp=1200, name='Sterling')
+        from .ranks import invalidate_tier_cache
+        invalidate_tier_cache()
+        response = self.client.get(reverse('xp-rank-tiers'))
+        by_slug = {t['slug']: t for t in response.data['tiers']}
+        self.assertEqual(by_slug['silver']['label'], 'Sterling')
+        self.assertEqual(by_slug['silver']['min_xp'], 1200)
+        self.assertEqual(by_slug['bronze']['max_xp'], 1199)
+        self.assertEqual(response.data['caller']['rank'], 'silver')  # 1500 XP still silver
+
     def test_requires_authentication(self):
         self.client.force_authenticate(user=None)
         response = self.client.get(reverse('xp-rank-tiers'))
@@ -432,7 +468,7 @@ class AcknowledgeLevelUpViewTests(TestCase):
         award_xp(self.user, self.action.slug)
         response = self.client.get(reverse('xp-status'))
         self.assertEqual(response.data['pending_level_up'], {
-            'rank': 'silver', 'rank_label': 'Silver', 'bonus_rp': RANK_UP_BONUS_RP['silver'],
+            'rank': 'silver', 'rank_label': 'Silver', 'bonus_rp': rank_up_bonus_rp('silver'),
         })
 
     def test_status_has_no_pending_level_up_for_a_fresh_user(self):

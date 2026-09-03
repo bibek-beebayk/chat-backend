@@ -2,6 +2,64 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
+from .ranks import invalidate_tier_cache
+
+
+def tier_badge_upload_to(instance, filename):
+    ext = (filename.rsplit('.', 1)[-1] if '.' in filename else 'png').lower()
+    return f'tier_badges/{instance.slug}.{ext}'
+
+
+class Tier(models.Model):
+    """
+    One rank tier in the Rollin Levels ladder. The whole ladder - names, XP
+    thresholds, rank-up bonuses, flavor copy and badge artwork - is data here,
+    fully managed from Django admin, not code. xp.ranks reads these rows (with
+    a short-lived cache) for all rank math, and xp.views.rank_tiers_view serves
+    them to the frontend.
+
+    Only min_xp is stored for the range: each tier runs from its own min_xp up
+    to (the next active tier's min_xp - 1), so ranges can never gap or overlap.
+    Exactly one tier must have min_xp=0 so every XP total resolves to a tier.
+    """
+    slug = models.SlugField(max_length=32, unique=True)
+    name = models.CharField(max_length=60)
+    min_xp = models.PositiveIntegerField(
+        unique=True,
+        help_text='Inclusive XP needed to reach this tier. Exactly one tier must be 0.',
+    )
+    rank_up_bonus_rp = models.PositiveIntegerField(
+        default=0,
+        help_text='One-time RP credited the first time a player reaches this tier. 0 = no bonus (e.g. the starting tier).',
+    )
+    tagline = models.CharField(max_length=120, blank=True)
+    badge = models.ImageField(upload_to=tier_badge_upload_to, blank=True, null=True)
+    is_active = models.BooleanField(
+        default=True,
+        help_text='Inactive tiers are excluded from the ladder and all rank math.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['min_xp']
+
+    def __str__(self):
+        return f'{self.name} ({self.min_xp}+ XP)'
+
+    @property
+    def label(self):
+        """Alias so a Tier stands in wherever the rank helpers' .label is read."""
+        return self.name
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        invalidate_tier_cache()
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        invalidate_tier_cache()
+
 
 class XPAction(models.Model):
     slug = models.SlugField(max_length=64, unique=True)

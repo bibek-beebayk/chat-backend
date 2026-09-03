@@ -2,19 +2,13 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 from notifications.services import create_notification
 from .models import XPAction, XPBalance, XPLedgerEntry
-from .ranks import rank_for_xp
+from .ranks import rank_by_slug, rank_for_xp
 
-# One-time RP credit for reaching each tier for the first time - a real
-# reward (not the mockup's fabricated frames/VIP/events perks). Bronze has
-# none since it's the starting tier, not something you rank "up" into.
-RANK_UP_BONUS_RP = {
-    'silver': 100,
-    'gold': 250,
-    'platinum': 500,
-    'diamond': 750,
-    'rollin_elite': 1000,
-    'rollin_legend': 1500,
-}
+
+def rank_up_bonus_rp(slug):
+    """One-time RP credit for first reaching the given tier (0 if none / unknown)."""
+    tier = rank_by_slug(slug)
+    return tier.rank_up_bonus_rp if tier else 0
 
 
 def _apply_rank_up_bonus(user, new_tier, balance):
@@ -24,7 +18,7 @@ def _apply_rank_up_bonus(user, new_tier, balance):
     balance.pending_celebration_rank = new_tier.slug
     balance.save(update_fields=['pending_celebration_rank'])
 
-    bonus = RANK_UP_BONUS_RP.get(new_tier.slug)
+    bonus = new_tier.rank_up_bonus_rp
     if not bonus:
         return
     # Lazy import: points/ has no reverse dependency on xp/, but every other

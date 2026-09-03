@@ -1,34 +1,62 @@
 from collections import namedtuple
 
-RankTier = namedtuple('RankTier', ['slug', 'label', 'min_xp'])
+from django.core.cache import cache
 
-# Sorted ascending by min_xp; the first tier must be min_xp=0 so every user
-# always resolves to a rank. Asserted below rather than silently trusted -
-# a misordered/misconfigured list here is a boundary bug that would
-# otherwise fail silently in rank_for_xp().
-RANK_THRESHOLDS = [
-    RankTier('bronze', 'Bronze', 0),
-    RankTier('silver', 'Silver', 1000),
-    RankTier('gold', 'Gold', 2500),
-    RankTier('platinum', 'Platinum', 5000),
-    RankTier('diamond', 'Diamond', 9000),
-    RankTier('rollin_elite', 'Rollin Elite', 15000),
-    RankTier('rollin_legend', 'Rollin Legend', 25000),
-]
+# Lightweight, pickle-safe projection of a Tier row, used for all rank math.
+# The full model (badge art, timestamps) is read directly where needed - see
+# xp.views.rank_tiers_view.
+RankTier = namedtuple('RankTier', ['slug', 'label', 'min_xp', 'rank_up_bonus_rp'])
 
-assert RANK_THRESHOLDS[0].min_xp == 0, 'first rank tier must start at 0 XP'
-assert all(
-    RANK_THRESHOLDS[i].min_xp < RANK_THRESHOLDS[i + 1].min_xp
-    for i in range(len(RANK_THRESHOLDS) - 1)
-), 'RANK_THRESHOLDS must be strictly ascending'
+_CACHE_KEY = 'xp:rank_tiers:v1'
+_CACHE_TTL = 300
 
-RANKS_BY_SLUG = {tier.slug: tier for tier in RANK_THRESHOLDS}
+
+def _load_tiers():
+    # Local import - xp.models imports this module for invalidate_tier_cache().
+    from .models import Tier
+
+    rows = (
+        Tier.objects
+        .filter(is_active=True)
+        .order_by('min_xp')
+        .values_list('slug', 'name', 'min_xp', 'rank_up_bonus_rp')
+    )
+    return [RankTier(slug, name, min_xp, bonus) for slug, name, min_xp, bonus in rows]
+
+
+def get_rank_tiers():
+    """
+    All active tiers as RankTier tuples, ascending by min_xp. Cached briefly
+    (per process) and invalidated on any Tier.save()/delete().
+    """
+    tiers = cache.get(_CACHE_KEY)
+    if tiers is None:
+        tiers = _load_tiers()
+        cache.set(_CACHE_KEY, tiers, _CACHE_TTL)
+    return tiers
+
+
+def invalidate_tier_cache():
+    cache.delete(_CACHE_KEY)
+
+
+def rank_by_slug(slug):
+    for tier in get_rank_tiers():
+        if tier.slug == slug:
+            return tier
+    return None
 
 
 def rank_for_xp(total_xp):
-    """Returns the RankTier whose min_xp is the highest one <= total_xp. Boundary is inclusive: total_xp == tier.min_xp reaches that tier."""
-    current = RANK_THRESHOLDS[0]
-    for tier in RANK_THRESHOLDS:
+    """
+    The tier whose min_xp is the highest one <= total_xp. Boundary is
+    inclusive: total_xp == tier.min_xp reaches that tier.
+    """
+    tiers = get_rank_tiers()
+    if not tiers:
+        raise RuntimeError('No active Tier rows configured - seed the Rollin Levels ladder (xp.Tier).')
+    current = tiers[0]
+    for tier in tiers:
         if total_xp >= tier.min_xp:
             current = tier
         else:
@@ -37,26 +65,29 @@ def rank_for_xp(total_xp):
 
 
 def next_rank_for_xp(total_xp):
-    """The tier after the current one, or None if already at the top rank."""
+    """The tier after the current one, or None if already at the top tier."""
+    tiers = get_rank_tiers()
     current = rank_for_xp(total_xp)
-    index = RANK_THRESHOLDS.index(current)
-    if index + 1 >= len(RANK_THRESHOLDS):
+    index = tiers.index(current)
+    if index + 1 >= len(tiers):
         return None
-    return RANK_THRESHOLDS[index + 1]
+    return tiers[index + 1]
 
 
 def sub_ranges_for_tier(tier_slug):
     """
     The 3 even sub-level (I/II/III) XP ranges within one tier - static tier
-    metadata, independent of any specific player. Returns None for a tier
-    with no next tier (the uncapped top rank), which has no sub-levels by
-    design - the Rollin Levels UI shows it as a distinct "prestige" state.
+    metadata, independent of any specific player. Returns None for the top
+    (uncapped) tier, which has no sub-levels by design.
     """
-    tier = RANKS_BY_SLUG[tier_slug]
-    index = RANK_THRESHOLDS.index(tier)
-    if index + 1 >= len(RANK_THRESHOLDS):
+    tiers = get_rank_tiers()
+    tier = rank_by_slug(tier_slug)
+    if tier is None:
         return None
-    next_tier = RANK_THRESHOLDS[index + 1]
+    index = tiers.index(tier)
+    if index + 1 >= len(tiers):
+        return None
+    next_tier = tiers[index + 1]
 
     span = next_tier.min_xp - tier.min_xp
     step = span // 3
@@ -78,7 +109,7 @@ def sub_level_for_xp(total_xp):
     """
     Which of the player's current tier's 3 sub-levels total_xp falls into,
     plus progress within it - computed live, no stored sub-tier concept.
-    Returns None for the top (uncapped) tier (see sub_ranges_for_tier).
+    Returns None for the top (uncapped) tier.
     """
     tier = rank_for_xp(total_xp)
     ranges = sub_ranges_for_tier(tier.slug)
