@@ -31,11 +31,12 @@ RANGE_DELTAS = {
 def player_stats_view(request):
     """
     Cross-game play stats for the profile page - aggregated live across the
-    three round tables (no aggregate counters cached anywhere), each game's
+    four round tables (no aggregate counters cached anywhere), each game's
     own real win-signal field. Lazy-imported for the same reason as
     xp.views._has_first_win: avoids a circular import with the low-level
     xp app these game apps already depend on.
     """
+    from hilo.models import HiLoRound
     from plinko.models import PlinkoRound
     from rocket.models import RocketRound
     from slots.models import SlotRound
@@ -50,17 +51,20 @@ def player_stats_view(request):
     plinko_qs = PlinkoRound.objects.filter(user=user)
     slots_qs = SlotRound.objects.filter(user=user)
     rocket_qs = RocketRound.objects.filter(user=user)
+    hilo_qs = HiLoRound.objects.filter(user=user)
     if since:
         plinko_qs = plinko_qs.filter(created_at__gte=since)
         slots_qs = slots_qs.filter(created_at__gte=since)
         rocket_qs = rocket_qs.filter(created_at__gte=since)
+        hilo_qs = hilo_qs.filter(created_at__gte=since)
 
-    rounds_played = plinko_qs.count() + slots_qs.count() + rocket_qs.count()
+    rounds_played = plinko_qs.count() + slots_qs.count() + rocket_qs.count() + hilo_qs.count()
 
     total_wins = (
         plinko_qs.filter(payout_amount__gt=F('wager_amount')).count()
         + slots_qs.filter(payout_amount__gt=0).count()
         + rocket_qs.filter(status=RocketRound.STATUS_CASHED_OUT).count()
+        + hilo_qs.filter(status=HiLoRound.STATUS_CASHED_OUT).count()
     )
 
     multipliers = []
@@ -73,6 +77,9 @@ def player_stats_view(request):
     rocket_max = rocket_qs.filter(status=RocketRound.STATUS_CASHED_OUT).aggregate(m=Max('cashout_multiplier'))['m']
     if rocket_max is not None:
         multipliers.append(rocket_max)
+    hilo_max = hilo_qs.filter(status=HiLoRound.STATUS_CASHED_OUT).aggregate(m=Max('multiplier'))['m']
+    if hilo_max is not None:
+        multipliers.append(hilo_max)
     highest_multiplier = max(multipliers) if multipliers else None
 
     return Response({
@@ -97,6 +104,7 @@ def recent_wins_view(request, slug):
     reason. is_test_user=False keeps seeded/QA accounts out of a feed real
     players see.
     """
+    from hilo.models import HiLoRound
     from plinko.models import PlinkoRound
     from rocket.models import RocketRound
     from slots.models import SlotRound
@@ -125,6 +133,14 @@ def recent_wins_view(request, slug):
             .order_by('-created_at')[:RECENT_WINS_LIMIT]
         )
         entries = [(r.user, r.cashout_multiplier, r.created_at) for r in qs]
+    elif slug == 'hilo':
+        qs = (
+            HiLoRound.objects
+            .filter(status=HiLoRound.STATUS_CASHED_OUT, user__is_test_user=False)
+            .select_related('user')
+            .order_by('-created_at')[:RECENT_WINS_LIMIT]
+        )
+        entries = [(r.user, r.multiplier, r.created_at) for r in qs]
     else:
         return Response({'error': 'Unknown game.'}, status=404)
 

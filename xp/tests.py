@@ -277,9 +277,14 @@ class AchievementsViewTests(TestCase):
         self.client.force_authenticate(user=self.user)
 
     def test_all_achievements_locked_for_new_user(self):
+        # Length is derived from the registry rather than hardcoded, so
+        # adding a game's achievement to ACHIEVEMENT_DEFINITIONS doesn't
+        # break this test for an unrelated reason.
+        from xp.views import ACHIEVEMENT_DEFINITIONS
+
         response = self.client.get(reverse('xp-achievements'))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.data), 4)
+        self.assertEqual(len(response.data), len(ACHIEVEMENT_DEFINITIONS))
         self.assertTrue(all(item['unlocked'] is False for item in response.data))
 
     def test_streak_7day_action_unlocks_the_matching_achievement(self):

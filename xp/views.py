@@ -18,6 +18,7 @@ ACHIEVEMENT_DEFINITIONS = [
     {'slug': 'first_win', 'label': 'First Win'},
     {'slug': 'rocket_cashout_above_10x', 'label': 'Moon Walker'},
     {'slug': 'rocket_five_alive', 'label': 'Five Alive'},
+    {'slug': 'hilo_streak_10', 'label': 'Card Counter'},
 ]
 
 # The two real player-facing "daily checklist" actions - NOT qualified_gameplay,
@@ -102,6 +103,7 @@ def _has_first_win(user):
     # Lazy imports - xp is a low-level app other games import from (via
     # award_xp), so importing their models back at module level here risks
     # a circular import. A local import avoids that entirely.
+    from hilo.models import HiLoRound
     from plinko.models import PlinkoRound
     from rocket.models import RocketRound
     from slots.models import SlotRound
@@ -111,6 +113,8 @@ def _has_first_win(user):
     if SlotRound.objects.filter(user=user, payout_amount__gt=0).exists():
         return True
     if RocketRound.objects.filter(user=user, status=RocketRound.STATUS_CASHED_OUT).exists():
+        return True
+    if HiLoRound.objects.filter(user=user, status=HiLoRound.STATUS_CASHED_OUT).exists():
         return True
     return False
 

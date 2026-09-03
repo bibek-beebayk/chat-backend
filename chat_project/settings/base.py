@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'plinko',
     'slots',
     'rocket',
+    'hilo',
     'stories',
 ]
 
