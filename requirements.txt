@@ -60,8 +60,8 @@ pillow==12.1.0
 prompt_toolkit==3.0.52
 proto-plus==1.27.1
 protobuf==6.33.5
-psycopg==3.3.2
-psycopg-binary==3.3.2
+psycopg==3.3.9
+psycopg-binary==3.3.9
 ptyprocess==0.7.0
 pure_eval==0.2.3
 py-ubjson==0.16.1
