@@ -95,3 +95,140 @@ class GrantDailyLoginRewardsTests(TestCase):
         XPAction.objects.filter(slug='daily_login').update(is_active=False)
         grant_daily_login_rewards(self.player)  # must not raise
         self.assertFalse(XPBalance.objects.filter(user=self.player).exists())
+
+
+class LoginHardeningTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from django.core.management import call_command
+        call_command('createcachetable', verbosity=0)
+
+    def setUp(self):
+        from django.core.cache import cache
+        from rest_framework.test import APIClient
+
+        cache.clear()
+        self.client = APIClient()
+        self.login_url = '/api/auth/login/'
+        self.resend_otp_url = '/api/auth/resend-otp/'
+
+        self.active_user = get_user_model().objects.create_user(
+            username='active_player',
+            email='active@example.com',
+            password='RightPassword123!',
+            user_type='player',
+            is_active=True,
+        )
+        self.unverified_user = get_user_model().objects.create_user(
+            username='unverified_player',
+            email='unverified@example.com',
+            password='RightPassword123!',
+            user_type='player',
+            is_active=False,
+        )
+
+    def test_wrong_password_returns_401_invalid_credentials(self):
+        response = self.client.post(
+            self.login_url,
+            {'username': 'active_player', 'password': 'WrongPassword!'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {
+                'status': 'error',
+                'code': 'invalid_credentials',
+                'message': 'Incorrect username, email or password. Please try again.',
+                'errors': None,
+            },
+        )
+
+    def test_unknown_user_returns_identical_401_body(self):
+        wrong_pw_resp = self.client.post(
+            self.login_url,
+            {'username': 'active_player', 'password': 'WrongPassword!'},
+            format='json',
+        )
+        unknown_resp = self.client.post(
+            self.login_url,
+            {'username': 'does_not_exist_user', 'password': 'WrongPassword!'},
+            format='json',
+        )
+        self.assertEqual(unknown_resp.status_code, 401)
+        self.assertEqual(unknown_resp.json(), wrong_pw_resp.json())
+
+    def test_unverified_user_with_right_password_returns_403_email_not_verified(self):
+        response = self.client.post(
+            self.login_url,
+            {'username': 'unverified_player', 'password': 'RightPassword123!'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json(),
+            {
+                'status': 'error',
+                'code': 'email_not_verified',
+                'message': "Your email isn't verified yet. Enter the code we sent to finish signing up.",
+                'errors': {'email': 'unverified@example.com'},
+            },
+        )
+
+    def test_unverified_user_with_wrong_password_returns_generic_401(self):
+        response = self.client.post(
+            self.login_url,
+            {'username': 'unverified@example.com', 'password': 'WrongPassword!'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json(),
+            {
+                'status': 'error',
+                'code': 'invalid_credentials',
+                'message': 'Incorrect username, email or password. Please try again.',
+                'errors': None,
+            },
+        )
+
+    def test_sixth_attempt_for_same_identifier_returns_429_with_retry_after(self):
+        for _ in range(5):
+            resp = self.client.post(
+                self.login_url,
+                {'username': 'active_player', 'password': 'WrongPassword!'},
+                format='json',
+            )
+            self.assertEqual(resp.status_code, 401)
+
+        throttled = self.client.post(
+            self.login_url,
+            {'username': '  ACTIVE_PLAYER  ', 'password': 'WrongPassword!'},
+            format='json',
+        )
+        self.assertEqual(throttled.status_code, 429)
+        body = throttled.json()
+        self.assertEqual(body['status'], 'error')
+        self.assertEqual(body['code'], 'throttled')
+        self.assertEqual(
+            body['message'],
+            'Too many login attempts. Please wait before trying again.',
+        )
+        self.assertIsNone(body['errors'])
+        self.assertIsInstance(body['retry_after'], int)
+        self.assertGreater(body['retry_after'], 0)
+        self.assertIn('Retry-After', throttled)
+        self.assertEqual(throttled['Retry-After'], str(body['retry_after']))
+
+    def test_resend_otp_works_for_unverified_user(self):
+        from unittest.mock import patch
+
+        with patch('accounts.views.send_otp_email', return_value=True):
+            response = self.client.post(
+                self.resend_otp_url,
+                {'email': 'unverified@example.com'},
+                format='json',
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'success')

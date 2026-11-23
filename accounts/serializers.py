@@ -145,26 +145,60 @@ class VerifyUserIDSerializer(serializers.Serializer):
             raise serializers.ValidationError("User ID cannot be empty.")
         return value
 
+from rest_framework.exceptions import APIException, AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+
+class InvalidCredentialsError(APIException):
+    status_code = 401
+    default_detail = 'Incorrect username, email or password. Please try again.'
+    default_code = 'invalid_credentials'
+    custom_code = 'invalid_credentials'
+
+
+class EmailNotVerifiedError(APIException):
+    status_code = 403
+    default_detail = "Your email isn't verified yet. Enter the code we sent to finish signing up."
+    default_code = 'email_not_verified'
+    custom_code = 'email_not_verified'
+
+    def __init__(self, email):
+        super().__init__(detail={'detail': self.default_detail, 'email': email}, code=self.default_code)
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     """
     Custom serializer to allow username-or-email login and include user data.
     """
+    default_error_messages = {
+        'no_active_account': InvalidCredentialsError.default_detail,
+    }
+
     def validate(self, attrs):
         identifier = (attrs.get(self.username_field) or '').strip()
+        password = attrs.get('password') or ''
+        matched_user = None
+
         if identifier:
             if '@' in identifier:
-                user = User.objects.filter(email__iexact=identifier).only('username').first()
-                if user:
-                    attrs[self.username_field] = user.username
-                else:
-                    attrs[self.username_field] = identifier
+                matched_user = User.objects.filter(email__iexact=identifier).first()
+                attrs[self.username_field] = matched_user.username if matched_user else identifier
             else:
+                matched_user = User.objects.filter(username=identifier).first()
                 attrs[self.username_field] = identifier
 
-        data = super().validate(attrs)
+        # Reveal unverified status ONLY after verifying the password so this
+        # endpoint cannot be used to enumerate registered emails.
+        if matched_user is not None and not matched_user.is_active:
+            if matched_user.check_password(password):
+                raise EmailNotVerifiedError(email=matched_user.email)
+            raise InvalidCredentialsError()
+
+        try:
+            data = super().validate(attrs)
+        except AuthenticationFailed:
+            raise InvalidCredentialsError()
+
         record_daily_visit(self.user)
         grant_daily_login_rewards(self.user)
         request = self.context.get('request')
