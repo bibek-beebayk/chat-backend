@@ -7,6 +7,9 @@ sleep 5  # or use a proper wait-for-db script
 # Apply migrations
 python manage.py migrate --noinput
 
+# Ensure database cache table exists for shared throttle counters
+python manage.py createcachetable
+
 # Collect static files
 python manage.py collectstatic --noinput
 

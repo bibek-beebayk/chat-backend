@@ -1,7 +1,8 @@
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from .throttles import LoginIPThrottle, LoginIdentifierThrottle, OTPThrottle
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.utils.text import slugify
@@ -135,6 +136,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     Login view that returns JWT tokens + user data.
     """
     serializer_class = CustomTokenObtainPairSerializer
+    throttle_classes = [LoginIPThrottle, LoginIdentifierThrottle]
 
 
 def _build_jwt_login_response(user, request, message='Login successful.'):
@@ -170,6 +172,7 @@ def _unique_google_username(email, name=''):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginIPThrottle])
 def google_login_view(request):
     serializer = GoogleLoginSerializer(data=request.data)
     if not serializer.is_valid():
@@ -773,6 +776,7 @@ def initiate_verification_request_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([OTPThrottle])
 def verify_otp_view(request):
     """
     Verify OTP code and activate user account.
@@ -879,11 +883,12 @@ def verify_otp_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([OTPThrottle])
 def resend_otp_view(request):
     """
     Resend OTP code to user's email.
     """
-    email = request.data.get('email')
+    email = (request.data.get('email') or '').strip()
     
     if not email:
         return Response(
@@ -893,7 +898,7 @@ def resend_otp_view(request):
     
     # Find user by email
     try:
-        user = User.objects.get(email=email)
+        user = User.objects.get(email__iexact=email)
     except User.DoesNotExist:
         return Response(
             {'error': 'No user found with this email address.'},
@@ -1058,6 +1063,7 @@ def test_email_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([OTPThrottle])
 def initiate_password_reset_view(request):
     """
     Step 1: Initiate password reset by sending OTP to email.
@@ -1110,6 +1116,7 @@ def initiate_password_reset_view(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([OTPThrottle])
 def verify_reset_otp_view(request):
     """
     Step 2: Verify OTP and return a signed reset token.

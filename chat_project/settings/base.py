@@ -130,11 +130,25 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        'auth_login_ip': os.environ.get('THROTTLE_AUTH_LOGIN_IP', '20/min'),
+        'auth_login_identifier': os.environ.get('THROTTLE_AUTH_LOGIN_IDENTIFIER', '5/min'),
+        'auth_otp': os.environ.get('THROTTLE_AUTH_OTP', '5/min'),
+    },
     'EXCEPTION_HANDLER': 'chat_project.exceptions.custom_exception_handler',
     'DEFAULT_RENDERER_CLASSES': [
         'chat_project.renderers.StandardResponseRenderer',
         'rest_framework.renderers.BrowsableAPIRenderer',
     ],
+}
+
+# Shared cache backend (database cache table so throttle counters are shared across workers).
+# Run `python manage.py createcachetable` on deploy (handled in entrypoint.sh).
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache_table',
+    }
 }
 
 from datetime import timedelta
