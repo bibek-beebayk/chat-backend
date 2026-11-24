@@ -49,6 +49,10 @@ class User(AbstractUser):
         default=False,
         help_text='Designates whether the user should choose a public username.',
     )
+    email_marketing_opt_in = models.BooleanField(
+        default=False,
+        help_text='User agreed to receive email updates about offers and rewards.',
+    )
     external_user_id = models.CharField(
         max_length=100,
         blank=True,

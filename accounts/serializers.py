@@ -94,10 +94,11 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
     confirm_password = serializers.CharField(write_only=True)
     email = serializers.EmailField(required=True)
+    email_marketing_opt_in = serializers.BooleanField(required=False, default=False)
     
     class Meta:
         model = User
-        fields = ['username', 'password', 'confirm_password', 'user_type', 'email']
+        fields = ['username', 'password', 'confirm_password', 'user_type', 'email', 'email_marketing_opt_in']
 
     def validate_user_type(self, value):
         # Agent self-registration is discontinued - the model still supports
